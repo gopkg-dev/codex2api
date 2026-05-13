@@ -1402,7 +1402,7 @@ func (h *Handler) FetchOpenAIResponsesModels(c *gin.Context) {
 	if req.AccountID > 0 && req.APIKey == "" {
 		row, err := h.db.GetAccountByID(c.Request.Context(), req.AccountID)
 		if err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				writeError(c, http.StatusNotFound, "账号不存在")
 				return
 			}
@@ -1468,7 +1468,7 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 	defer cancel()
 	row, err := h.db.GetAccountByID(ctx, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
@@ -1533,7 +1533,7 @@ func (h *Handler) UpdateOpenAIResponsesAccount(c *gin.Context) {
 	}
 
 	if err := h.db.UpdateOpenAIResponsesAccount(ctx, id, name, credentials, req.ProxyURL); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
@@ -2313,7 +2313,7 @@ func (h *Handler) DeleteAccount(c *gin.Context) {
 
 	// 软删除：保留账号数据与事件记录，但从运行时池和 active 列表中移除。
 	if err := h.db.SoftDeleteAccount(ctx, id); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
@@ -2377,7 +2377,7 @@ func (h *Handler) ToggleAccountEnabled(c *gin.Context) {
 	defer cancel()
 
 	if err := h.db.SetAccountEnabled(ctx, id, *req.Enabled); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
@@ -3307,7 +3307,7 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 	defer cancel()
 	row, err := h.db.GetAPIKeyByID(ctx, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "API Key 不存在")
 			return
 		}
@@ -4368,7 +4368,7 @@ func (h *Handler) GetAccountAuthJSON(c *gin.Context) {
 
 	row, err := h.db.GetAccountByID(ctx, id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "账号不存在")
 			return
 		}
@@ -4768,7 +4768,7 @@ func (h *Handler) DeleteProxy(c *gin.Context) {
 	defer cancel()
 
 	if err := h.db.DeleteProxy(ctx, id); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "代理不存在")
 			return
 		}
@@ -4804,7 +4804,7 @@ func (h *Handler) UpdateProxy(c *gin.Context) {
 	defer cancel()
 
 	if err := h.db.UpdateProxy(ctx, id, req.URL, req.Label, req.Enabled); err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			writeError(c, http.StatusNotFound, "代理不存在")
 			return
 		}

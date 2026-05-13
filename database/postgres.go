@@ -1167,7 +1167,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
 		&s.ImageStorageConfig,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	s.SiteName = NormalizeSiteName(s.SiteName)
@@ -1423,7 +1423,7 @@ func (db *DB) UpdateProxy(ctx context.Context, id int64, urlValue *string, label
 	if urlValue == nil && label == nil && enabled == nil {
 		var exists int
 		if err := db.conn.QueryRowContext(ctx, `SELECT 1 FROM proxies WHERE id = $1`, id).Scan(&exists); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return sql.ErrNoRows
 			}
 			return err
@@ -3105,7 +3105,7 @@ func (db *DB) GetAccountByID(ctx context.Context, id int64) (*AccountRow, error)
 		&updatedAtRaw,
 	)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, sql.ErrNoRows
 		}
 		return nil, fmt.Errorf("查询账号失败: %w", err)
@@ -3176,7 +3176,7 @@ func (db *DB) UpdateAccountSchedulerConfig(ctx context.Context, id int64, scoreB
 		}
 		var exists int
 		if err := tx.QueryRowContext(ctx, query, id).Scan(&exists); err != nil {
-			if err == sql.ErrNoRows {
+			if errors.Is(err, sql.ErrNoRows) {
 				return sql.ErrNoRows
 			}
 			return err

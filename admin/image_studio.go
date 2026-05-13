@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -137,7 +138,7 @@ func (h *Handler) UpdateImagePromptTemplate(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	existing, err := h.db.GetImagePromptTemplate(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "模板不存在")
 		return
 	}
@@ -343,7 +344,7 @@ func (h *Handler) GetImageGenerationJob(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	job, err := h.db.GetImageGenerationJob(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "任务不存在")
 		return
 	}
@@ -415,7 +416,7 @@ func (h *Handler) GetImageAssetFile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	asset, err := h.db.GetImageAsset(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "图片不存在")
 		return
 	}
@@ -449,7 +450,7 @@ func (h *Handler) GetSignedImageAssetFile(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	asset, err := h.db.GetImageAsset(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "图片不存在")
 		return
 	}
@@ -603,7 +604,7 @@ func (h *Handler) DeleteImageAsset(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 	asset, err := h.db.GetImageAsset(ctx, id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		writeError(c, http.StatusNotFound, "图片不存在")
 		return
 	}
@@ -981,13 +982,13 @@ func (h *Handler) upscaleImageJobAsset(ctx context.Context, jobID int64, assetIn
 func (h *Handler) resolveImageJobAPIKey(ctx context.Context, id int64) (*database.APIKeyRow, error) {
 	if id > 0 {
 		key, err := h.db.GetAPIKeyByID(ctx, id)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("API Key 不存在")
 		}
 		return key, err
 	}
 	key, err := h.db.FirstAPIKey(ctx)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return key, err
