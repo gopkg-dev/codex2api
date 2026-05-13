@@ -40,7 +40,7 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
     glyph: 'CS',
     blurb: 'Claude Code 多账号切换器，一键唤起并写入配置。',
     kind: 'protocol',
-    url: 'cc-switch://import?data={ccSwitchConfig}',
+    url: 'ccswitch',
   },
   {
     id: 'codex-cli',
@@ -109,6 +109,18 @@ function encodeBase64(text: string): string {
 export function resolveTemplate(tool: QuickTool, address: string, key: string): string {
   const base = tool.kind === 'protocol' ? tool.url : tool.template
   if (!base) return ''
+  if (tool.id === 'cc-switch') {
+    const params = new URLSearchParams()
+    params.set('resource', 'provider')
+    params.set('app', 'claude')
+    params.set('name', 'Codex2API Claude')
+    params.set('endpoint', address)
+    params.set('apiKey', key)
+    params.set('model', 'claude-sonnet-4-5-20250514')
+    params.set('homepage', address)
+    params.set('enabled', 'true')
+    return `ccswitch://v1/import?${params.toString()}`
+  }
   if (base.includes('{cherryConfig}')) {
     const cfg = encodeURIComponent(encodeBase64(JSON.stringify({
       id: 'codex2api',
@@ -124,15 +136,6 @@ export function resolveTemplate(tool: QuickTool, address: string, key: string): 
       apiKey: key,
     })))
     return base.split('{aionuiConfig}').join(cfg)
-  }
-  if (base.includes('{ccSwitchConfig}')) {
-    const cfg = encodeURIComponent(encodeBase64(JSON.stringify({
-      name: 'codex2api',
-      baseURL: address,
-      apiKey: key,
-      anthropicVersion: '2023-06-01',
-    })))
-    return base.split('{ccSwitchConfig}').join(cfg)
   }
   return base
     .split('{address}').join(address)

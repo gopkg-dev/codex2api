@@ -14,6 +14,8 @@ import DocsTOC, { type DocsTOCItem } from './docs/DocsTOC'
 import { QUICK_TOOLS, resolveTemplate, type QuickTool } from './docs/quickStartTools'
 import { buildAdminSpecs, buildDocsMarkdown, buildEndpointSpecs } from './docs/docsContent'
 
+const FALLBACK_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250514']
+
 const SECTION_ICON: Record<string, ReactNode> = {
   'quick-start': <Sparkles className="size-4" />,
   'client-config': <Terminal className="size-4" />,
@@ -175,6 +177,37 @@ function QuickToolCard({ tool, baseUrl, apiKey, onCopied, onLaunched }: {
   )
 }
 
+function buildCCSwitchImportUrl({
+  app,
+  name,
+  endpoint,
+  apiKey,
+  model,
+  homepage,
+}: {
+  app: 'claude' | 'codex'
+  name: string
+  endpoint: string
+  apiKey: string
+  model: string
+  homepage: string
+}) {
+  const params = new URLSearchParams()
+  params.set('resource', 'provider')
+  params.set('app', app)
+  params.set('name', name)
+  params.set('endpoint', endpoint)
+  params.set('apiKey', apiKey)
+  params.set('model', model)
+  params.set('homepage', homepage)
+  params.set('enabled', 'true')
+  return `ccswitch://v1/import?${params.toString()}`
+}
+
+function encodeBase64(text: string): string {
+  return btoa(unescape(encodeURIComponent(text)))
+}
+
 function SectionHeader({ id, icon, tone, eyebrow, title, description }: { id: string; icon: ReactNode; tone: { text: string; bg: string; ring: string }; eyebrow?: string; title: string; description?: string }) {
   return (
     <div id={id} className="scroll-mt-20 mt-6 mb-4 first:mt-2">
@@ -204,8 +237,11 @@ export default function Docs() {
   const [copyingMd, setCopyingMd] = useState(false)
   const { toast, showToast } = useToast()
   const [selectedKey, setSelectedKey] = useState('')
+  const [activeToolTab, setActiveToolTab] = useState<'codex-cli' | 'claude-code' | 'cc-switch' | 'cherry-studio'>('codex-cli')
+  const [quickStartModel, setQuickStartModel] = useState('gpt-5.4')
   const [activeCurl, setActiveCurl] = useState<'responses' | 'chat' | 'messages'>('responses')
   const [curlModel, setCurlModel] = useState('gpt-5.4')
+  const [models, setModels] = useState(FALLBACK_MODELS)
 
   useEffect(() => {
     api.getAPIKeys().then((res) => {
@@ -215,6 +251,21 @@ export default function Docs() {
         setFirstKey(keys[0].key)
         setSelectedKey(keys[0].key)
       }
+    }).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    api.getModels().then((res) => {
+      const next = [
+        ...(res.models ?? []),
+        ...((res.items ?? []).map((item) => item.id)),
+      ].filter(Boolean)
+      const unique = Array.from(new Set(next))
+      if (unique.length === 0) return
+      setModels(unique)
+      const preferred = unique.includes('gpt-5.4') ? 'gpt-5.4' : unique[0]
+      setQuickStartModel((current) => unique.includes(current) ? current : preferred)
+      setCurlModel((current) => unique.includes(current) ? current : preferred)
     }).catch(() => {})
   }, [])
 
@@ -284,8 +335,8 @@ export default function Docs() {
   const activeKey = selectedKey || firstKey || 'YOUR_API_KEY'
 
   const codexConfigToml = `model_provider = "OpenAI"
-model = "gpt-5.4"
-review_model = "gpt-5.4"
+model = "${quickStartModel}"
+review_model = "${quickStartModel}"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
@@ -348,7 +399,20 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
     chat: chatCurl,
     messages: messagesCurl,
   }
-
+  const ccSwitchApp = quickStartModel.startsWith('claude-') ? 'claude' : 'codex'
+  const ccSwitchUrl = buildCCSwitchImportUrl({
+    app: ccSwitchApp,
+    name: ccSwitchApp === 'codex' ? 'Codex2API Codex' : 'Codex2API Claude',
+    endpoint: ccSwitchApp === 'codex' ? `${baseUrl}/v1` : baseUrl,
+    apiKey: activeKey,
+    model: quickStartModel,
+    homepage: baseUrl,
+  })
+  const cherryConfig = `cherrystudio://providers/api-keys?v=1&data=${encodeURIComponent(encodeBase64(JSON.stringify({
+    id: 'codex2api',
+    baseUrl,
+    apiKey: activeKey,
+  })))}`
   return (
     <>
       <PageHeader
@@ -423,17 +487,88 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
                   )}
                 </div>
               </div>
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                {QUICK_TOOLS.map((tool) => (
-                  <QuickToolCard
-                    key={tool.id}
-                    tool={tool}
-                    baseUrl={baseUrl}
-                    apiKey={selectedKey || firstKey}
-                    onCopied={(name) => showToast(t('docs.quickStart.copiedToast', { name }), 'success')}
-                    onLaunched={(name) => showToast(t('docs.quickStart.launchedToast', { name }), 'success')}
+              <div className="mb-3">
+                <UnderlineTabs
+                  active={activeToolTab}
+                  onChange={setActiveToolTab}
+                  tabs={[
+                    { value: 'codex-cli', label: 'Codex CLI' },
+                    { value: 'claude-code', label: 'Claude Code' },
+                    { value: 'cc-switch', label: 'CC Switch' },
+                    { value: 'cherry-studio', label: 'Cherry Studio' },
+                  ]}
+                />
+              </div>
+              <div className="mb-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="rounded-xl border border-border bg-muted/30 p-3">
+                  <div className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Endpoint</div>
+                  <code className="mt-1 block truncate text-sm font-semibold text-foreground">
+                    {activeToolTab === 'cc-switch' && ccSwitchApp === 'codex' ? `${baseUrl}/v1` : baseUrl}
+                  </code>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-[11px] font-bold uppercase tracking-wide text-muted-foreground">Model</label>
+                  <Select
+                    compact
+                    value={quickStartModel}
+                    onValueChange={setQuickStartModel}
+                    options={models.map((model) => ({ label: model, value: model }))}
                   />
-                ))}
+                </div>
+              </div>
+              <div className="space-y-4">
+                {activeToolTab === 'codex-cli' && (
+                  <>
+                    <OsTabs active={codexOs} onChange={setCodexOs} />
+                    <CodeBlock label={`${codexConfigDir}/config.toml`} content={codexConfigToml} lang="toml" />
+                    <CodeBlock label={`${codexConfigDir}/auth.json`} content={codexAuthJson} lang="json" />
+                  </>
+                )}
+                {activeToolTab === 'claude-code' && (
+                  <>
+                    <OsTabs active={claudeOs} onChange={setClaudeOs} />
+                    <CodeBlock
+                      label={claudeOs === 'unix' ? 'Terminal' : 'Command Prompt'}
+                      content={claudeOs === 'unix' ? claudeEnvUnix : claudeEnvWindows}
+                      lang="bash"
+                    />
+                    <CodeBlock label={`${claudeConfigDir}/settings.json`} content={claudeSettingsJson} lang="json" />
+                  </>
+                )}
+                {activeToolTab === 'cc-switch' && (
+                  <>
+                    <CodeBlock label="CC Switch deeplink" content={ccSwitchUrl} lang="bash" />
+                    <Button
+                      type="button"
+                      disabled={!selectedKey && !firstKey}
+                      onClick={() => {
+                        window.open(ccSwitchUrl, '_blank')
+                        showToast(t('docs.quickStart.launchedToast', { name: 'CC Switch' }), 'success')
+                      }}
+                      className="gap-1.5"
+                    >
+                      <ExternalLink className="size-3.5" />
+                      {t('docs.quickStart.launch')}
+                    </Button>
+                  </>
+                )}
+                {activeToolTab === 'cherry-studio' && (
+                  <>
+                    <CodeBlock label="Cherry Studio deeplink" content={cherryConfig} lang="bash" />
+                    <Button
+                      type="button"
+                      disabled={!selectedKey && !firstKey}
+                      onClick={() => {
+                        window.open(cherryConfig, '_blank')
+                        showToast(t('docs.quickStart.launchedToast', { name: 'Cherry Studio' }), 'success')
+                      }}
+                      className="gap-1.5"
+                    >
+                      <ExternalLink className="size-3.5" />
+                      {t('docs.quickStart.launch')}
+                    </Button>
+                  </>
+                )}
               </div>
             </CardContent>
           </Card>
