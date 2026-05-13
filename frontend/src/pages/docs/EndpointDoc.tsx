@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Copy, Check, Play, Loader2 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,9 +11,28 @@ import {
 } from '@/components/ui/dialog'
 import { useHighlightedHtml } from '../../hooks/useHighlighter'
 
-export function CodeBlock({ label, content, lang }: { label?: string; content: string; lang?: string }) {
+export const CodeBlock = memo(function CodeBlock({ label, content, lang }: { label?: string; content: string; lang?: string }) {
   const [copied, setCopied] = useState(false)
-  const highlightedHtml = useHighlightedHtml(content, lang || (label?.endsWith('.toml') ? 'toml' : label?.endsWith('.json') ? 'json' : 'bash'))
+  const [shouldHighlight, setShouldHighlight] = useState(false)
+  const blockRef = useRef<HTMLDivElement>(null)
+  const resolvedLang = lang || (label?.endsWith('.toml') ? 'toml' : label?.endsWith('.json') ? 'json' : 'bash')
+  const highlightedHtml = useHighlightedHtml(shouldHighlight ? content : '', resolvedLang)
+
+  useEffect(() => {
+    const el = blockRef.current
+    if (!el || shouldHighlight) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setShouldHighlight(true)
+          observer.disconnect()
+        }
+      },
+      { rootMargin: '360px 0px' }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [shouldHighlight])
 
   const handleCopy = async () => {
     try {
@@ -32,7 +51,7 @@ export function CodeBlock({ label, content, lang }: { label?: string; content: s
   }
 
   return (
-    <div className="code-panel relative">
+    <div ref={blockRef} className="code-panel relative">
       {label && (
         <div className="code-panel-header">
           <span className="code-panel-label">{label}</span>
@@ -67,7 +86,7 @@ export function CodeBlock({ label, content, lang }: { label?: string; content: s
       )}
     </div>
   )
-}
+})
 
 export function MethodBadge({ method, sm }: { method: string; sm?: boolean }) {
   const colors: Record<string, string> = {
@@ -293,7 +312,7 @@ function TryItDialog({ open, onClose, method, path, defaultBody, apiKey, baseUrl
   )
 }
 
-export function EndpointDoc({
+export const EndpointDoc = memo(function EndpointDoc({
   id,
   method,
   path,
@@ -324,52 +343,58 @@ export function EndpointDoc({
   const [tryOpen, setTryOpen] = useState(false)
 
   return (
-    <Card id={id} className="mb-6 scroll-mt-20 py-0">
-      <CardContent className="p-6">
-        <h3 className="text-xl font-bold text-foreground mb-1">{title}</h3>
-        <p className="text-sm text-muted-foreground mb-4">{description}</p>
+    <Card id={id} className="mb-4 scroll-mt-20 py-0">
+      <CardContent className="p-4">
+        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-[17px] font-bold text-foreground">{title}</h3>
+            <p className="mt-0.5 text-[13px] text-muted-foreground">{description}</p>
+          </div>
+        </div>
 
-        <div className="flex items-center gap-3 p-3 rounded-xl border border-border bg-muted/30 mb-5">
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-muted/30 p-2.5">
           <MethodBadge method={method} />
-          <code className="code-inline flex-1">{path}</code>
+          <code className="code-inline min-w-0 flex-1 truncate">{path}</code>
           <Button
             size="sm"
             onClick={() => setTryOpen(true)}
-            className="gap-1.5 bg-emerald-600 text-white shrink-0 hover:bg-emerald-600/90 dark:bg-emerald-500/90 dark:hover:bg-emerald-500"
+            className="h-8 gap-1.5 bg-emerald-600 text-white shrink-0 hover:bg-emerald-600/90 dark:bg-emerald-500/90 dark:hover:bg-emerald-500"
           >
             <Play className="size-3.5" />
             {t('apiRef.tryIt.button')}
           </Button>
         </div>
 
-        <TryItDialog
-          open={tryOpen}
-          onClose={() => setTryOpen(false)}
-          method={method}
-          path={path}
-          defaultBody={defaultBody || ''}
-          apiKey={apiKey || ''}
-          baseUrl={baseUrl || ''}
-          allKeys={allKeys || []}
-        />
+        {tryOpen && (
+          <TryItDialog
+            open={tryOpen}
+            onClose={() => setTryOpen(false)}
+            method={method}
+            path={path}
+            defaultBody={defaultBody || ''}
+            apiKey={apiKey || ''}
+            baseUrl={baseUrl || ''}
+            allKeys={allKeys || []}
+          />
+        )}
 
-        <div className="mb-5">
+        <div className="mb-4">
           <CodeBlock label="cURL" content={curlExample} lang="bash" />
         </div>
 
-        <div className="border border-border rounded-xl overflow-hidden">
-          <div className="px-4 pt-1.5 bg-muted/30">
+        <div className="code-panel">
+          <div className="code-panel-header px-4 pt-1.5 pb-0">
             <StatusTabs
               tabs={responseExamples.map(r => ({ code: r.code }))}
               active={activeStatus}
               onChange={setActiveStatus}
             />
           </div>
-          <pre className="code-panel-pre max-h-[400px] bg-transparent text-[13px]">
+          <pre className="code-panel-pre max-h-[340px] bg-transparent text-[13px]">
             <code>{activeBody}</code>
           </pre>
         </div>
       </CardContent>
     </Card>
   )
-}
+})

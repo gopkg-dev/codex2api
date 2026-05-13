@@ -12,10 +12,21 @@ import { CodeBlock, EndpointDoc } from './docs/EndpointDoc'
 import DocsTOC, { type DocsTOCItem } from './docs/DocsTOC'
 import { QUICK_TOOLS, resolveTemplate, type QuickTool } from './docs/quickStartTools'
 import { buildAdminSpecs, buildDocsMarkdown, buildEndpointSpecs } from './docs/docsContent'
+import { DEFAULT_CLAUDE_MODEL_MAP } from '../lib/modelMapping'
 import type { SystemSettings } from '../types'
 
 const FALLBACK_MODELS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'claude-sonnet-4-5-20250514']
 type CCSwitchApp = 'claude' | 'codex' | 'gemini'
+type QuickToolTab = 'codex-cli' | 'claude-code' | 'cc-switch' | 'cherry-studio'
+
+const CC_SWITCH_LOGO = 'https://ccswitch.io/assets/cc-switch-logo-BPrI77SG.png'
+const LOBE_ICON_BASE = 'https://unpkg.com/@lobehub/icons-static-svg@latest/icons'
+const CLIENT_ICON_SRC: Record<QuickToolTab, string> = {
+  'codex-cli': `${LOBE_ICON_BASE}/codex-color.svg`,
+  'claude-code': `${LOBE_ICON_BASE}/claudecode-color.svg`,
+  'cc-switch': CC_SWITCH_LOGO,
+  'cherry-studio': `${LOBE_ICON_BASE}/cherrystudio-color.svg`,
+}
 
 const CC_SWITCH_APPS: Record<CCSwitchApp, { label: string; suffix: string; endpoint: (baseUrl: string) => string; fields: { key: string; label: string }[] }> = {
   claude: {
@@ -91,7 +102,7 @@ function OsTabs({ active, onChange }: { active: 'unix' | 'windows'; onChange: (v
 
 const FIELD_LABEL = 'mb-1.5 block text-[11px] font-bold text-muted-foreground'
 const FIELD_INPUT = 'h-8 w-full rounded-lg border border-input bg-background px-2.5 text-[13px] font-medium text-foreground shadow-xs outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground hover:border-primary/30 hover:bg-accent/50 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/20'
-const CONFIG_PANEL = 'grid gap-3 rounded-lg border border-border bg-muted/20 p-3'
+const CONFIG_PANEL = 'grid gap-3 rounded-lg border border-border bg-muted/25 p-3 shadow-[inset_0_1px_0_hsl(0_0%_100%/0.35)] dark:shadow-none'
 
 function FieldBox({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -99,6 +110,124 @@ function FieldBox({ label, children }: { label: string; children: ReactNode }) {
       <label className={FIELD_LABEL}>{label}</label>
       {children}
     </div>
+  )
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.cssText = 'position:fixed;left:-9999px'
+    document.body.appendChild(ta)
+    ta.select()
+    document.execCommand('copy')
+    document.body.removeChild(ta)
+  }
+}
+
+function ClientIcon({ id, size = 18 }: { id: QuickToolTab; size?: number }) {
+  return (
+    <img
+      src={CLIENT_ICON_SRC[id]}
+      alt=""
+      width={size}
+      height={size}
+      className="rounded-[4px] object-contain"
+      loading="lazy"
+      decoding="async"
+    />
+  )
+}
+
+function ImportPreviewCard({
+  title,
+  description,
+  icon,
+  link,
+  disabled,
+  onLaunch,
+  onCopied,
+}: {
+  title: string
+  description: string
+  icon: ReactNode
+  link: string
+  disabled?: boolean
+  onLaunch: () => void
+  onCopied: () => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    await copyToClipboard(link)
+    setCopied(true)
+    onCopied()
+    window.setTimeout(() => setCopied(false), 1200)
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card/80 p-3.5 shadow-sm transition-[border-color,box-shadow] duration-200 hover:border-primary/25 hover:shadow-md">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex items-start gap-3">
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15">
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h4 className="text-[14px] font-bold text-foreground">{title}</h4>
+              <Badge variant="outline" className="h-5 px-1.5 text-[10px] font-bold">deeplink</Badge>
+            </div>
+            <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">{description}</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => void handleCopy()} className="h-8 gap-1.5">
+            {copied ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
+            {copied ? '已复制' : '复制链接'}
+          </Button>
+          <Button type="button" size="sm" disabled={disabled} onClick={onLaunch} className="h-8 gap-1.5">
+            <ExternalLink className="size-3.5" />
+            打开客户端
+          </Button>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        className="mt-2 inline-flex items-center gap-1 text-[12px] font-semibold text-muted-foreground hover:text-foreground"
+      >
+        {expanded ? '收起完整链接' : '查看完整链接'}
+      </button>
+      {expanded && (
+        <div className="mt-2 rounded-lg border border-border bg-muted/25 p-2.5">
+          <code className="block max-h-28 overflow-auto break-all font-mono text-[12px] leading-relaxed text-foreground">
+            {link}
+          </code>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ToolTabButton({ selected, id, label, onClick }: { selected: boolean; id: QuickToolTab; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex h-8 items-center justify-center gap-2 rounded-lg px-3 text-[13px] font-semibold transition-[background-color,color,box-shadow] ${
+        selected
+          ? 'bg-background text-foreground shadow-sm ring-1 ring-border'
+          : 'text-muted-foreground hover:bg-background/60 hover:text-foreground'
+      }`}
+    >
+      <span className="inline-flex size-5 items-center justify-center">
+        <ClientIcon id={id} size={18} />
+      </span>
+      {label}
+    </button>
   )
 }
 
@@ -251,7 +380,8 @@ function parseModelMapping(settings?: SystemSettings | null): Record<string, str
   try {
     const parsed = JSON.parse(settings.model_mapping)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
-    return Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string>
+    const entries = Object.entries(parsed).filter(([, value]) => typeof value === 'string') as [string, string][]
+    return entries.length > 0 ? Object.fromEntries(entries) : {}
   } catch {
     return {}
   }
@@ -264,6 +394,14 @@ function slugProviderId(name: string) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return slug || 'codexproxy'
+}
+
+function modelIncludes(models: string[], model?: string) {
+  return Boolean(model && models.includes(model))
+}
+
+function preferredMappedClaudeModel(mappedClaudeModels: string[], keyword: string, fallback: string) {
+  return mappedClaudeModels.find((model) => model.toLowerCase().includes(keyword)) ?? fallback
 }
 
 function encodeBase64(text: string): string {
@@ -300,7 +438,7 @@ export default function Docs() {
   const [copyingMd, setCopyingMd] = useState(false)
   const { toast, showToast } = useToast()
   const [selectedKey, setSelectedKey] = useState('')
-  const [activeToolTab, setActiveToolTab] = useState<'codex-cli' | 'claude-code' | 'cc-switch' | 'cherry-studio'>('codex-cli')
+  const [activeToolTab, setActiveToolTab] = useState<QuickToolTab>('codex-cli')
   const [quickStartModel, setQuickStartModel] = useState('gpt-5.4')
   const [settings, setSettings] = useState<SystemSettings | null>(null)
   const [ccSwitchApp, setCcSwitchApp] = useState<CCSwitchApp>('codex')
@@ -347,7 +485,10 @@ export default function Docs() {
     }).catch(() => {})
   }, [])
 
-  const modelMapping = useMemo(() => parseModelMapping(settings), [settings])
+  const modelMapping = useMemo(() => {
+    const configured = parseModelMapping(settings)
+    return Object.keys(configured).length > 0 ? configured : DEFAULT_CLAUDE_MODEL_MAP
+  }, [settings])
   const mappedClaudeModels = useMemo(() => Object.keys(modelMapping), [modelMapping])
   const modelOptions = useMemo(() => models.map((model) => ({ label: model, value: model })), [models])
   const claudeModelOptions = useMemo(() => {
@@ -372,14 +513,18 @@ export default function Docs() {
     const config = CC_SWITCH_APPS[ccSwitchApp]
     if (!ccSwitchNameEdited) setCcSwitchName(`${siteName} ${config.suffix}`)
     setCcSwitchModels((current) => {
-      const preferredClaude = mappedClaudeModels.find((model) => model.includes('sonnet')) ?? mappedClaudeModels[0] ?? 'claude-sonnet-4-5-20250514'
+      const preferredClaude = preferredMappedClaudeModel(mappedClaudeModels, 'sonnet', 'claude-sonnet-4-5-20250514')
       const preferredCodex = models.includes(quickStartModel) ? quickStartModel : models[0] ?? FALLBACK_MODELS[0]
       const next: Record<string, string> = {}
       config.fields.forEach((field) => {
-        if (field.key === 'haikuModel') next[field.key] = mappedClaudeModels.find((model) => model.includes('haiku')) ?? preferredClaude
-        else if (field.key === 'opusModel') next[field.key] = mappedClaudeModels.find((model) => model.includes('opus')) ?? preferredClaude
-        else if (field.key === 'sonnetModel') next[field.key] = mappedClaudeModels.find((model) => model.includes('sonnet')) ?? preferredClaude
-        else next[field.key] = current[field.key] || (ccSwitchApp === 'claude' ? preferredClaude : preferredCodex)
+        if (ccSwitchApp === 'claude') {
+          if (field.key === 'haikuModel') next[field.key] = modelIncludes(mappedClaudeModels, current[field.key]) ? current[field.key] : preferredMappedClaudeModel(mappedClaudeModels, 'haiku', preferredClaude)
+          else if (field.key === 'opusModel') next[field.key] = modelIncludes(mappedClaudeModels, current[field.key]) ? current[field.key] : preferredMappedClaudeModel(mappedClaudeModels, 'opus', preferredClaude)
+          else if (field.key === 'sonnetModel') next[field.key] = modelIncludes(mappedClaudeModels, current[field.key]) ? current[field.key] : preferredMappedClaudeModel(mappedClaudeModels, 'sonnet', preferredClaude)
+          else next[field.key] = modelIncludes(mappedClaudeModels, current[field.key]) ? current[field.key] : preferredClaude
+          return
+        }
+        next[field.key] = modelIncludes(models, current[field.key]) ? current[field.key] : preferredCodex
       })
       return next
     })
@@ -531,6 +676,10 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
     baseUrl: quickBaseUrl,
     apiKey: activeKey,
   })))}`
+  const hasUsableKey = Boolean(selectedKey || firstKey)
+  const handleImportLinkCopied = (name: string) => {
+    showToast(t('docs.quickStart.copiedToast', { name }), 'success')
+  }
   return (
     <>
       <div className="mb-4 max-w-[760px]">
@@ -609,17 +758,23 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
                   )}
                 </div>
               </div>
-              <div className="mb-3">
-                <UnderlineTabs
-                  active={activeToolTab}
-                  onChange={setActiveToolTab}
-                  tabs={[
+              <div className="mb-3 rounded-xl border border-border bg-muted/25 p-1">
+                <div className="grid gap-1 sm:grid-cols-4">
+                  {[
                     { value: 'codex-cli', label: 'Codex CLI' },
                     { value: 'claude-code', label: 'Claude Code' },
                     { value: 'cc-switch', label: 'CC Switch' },
                     { value: 'cherry-studio', label: 'Cherry Studio' },
-                  ]}
-                />
+                  ].map((tab) => (
+                    <ToolTabButton
+                      key={tab.value}
+                      selected={activeToolTab === tab.value}
+                      id={tab.value as QuickToolTab}
+                      label={tab.label}
+                      onClick={() => setActiveToolTab(tab.value as QuickToolTab)}
+                    />
+                  ))}
+                </div>
               </div>
               <div className={`mb-4 ${CONFIG_PANEL} md:grid-cols-[minmax(0,1fr)_260px]`}>
                 <FieldBox label="端点地址">
@@ -690,28 +845,34 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
                       </FieldBox>
                       {ccSwitchConfig.fields.map((field) => (
                         <FieldBox key={field.key} label={field.label}>
-                          <Select
-                            compact
-                            value={ccSwitchModels[field.key] || ''}
-                            onValueChange={(value) => setCcSwitchModels((current) => ({ ...current, [field.key]: value }))}
-                            options={ccSwitchModelOptions}
-                          />
+                          <div className="space-y-1.5">
+                            <Select
+                              compact
+                              value={ccSwitchModels[field.key] || ''}
+                              onValueChange={(value) => setCcSwitchModels((current) => ({ ...current, [field.key]: value }))}
+                              options={ccSwitchModelOptions}
+                            />
+                            {ccSwitchApp === 'claude' && ccSwitchModels[field.key] ? (
+                              <div className="truncate text-[11px] font-medium text-muted-foreground">
+                                映射到 <code className="font-mono text-foreground">{modelMapping[ccSwitchModels[field.key]] ?? '后端默认模型'}</code>
+                              </div>
+                            ) : null}
+                          </div>
                         </FieldBox>
                       ))}
                     </div>
-                    <CodeBlock label="CC Switch 导入链接" content={ccSwitchUrl} lang="bash" />
-                    <Button
-                      type="button"
-                      disabled={!selectedKey && !firstKey}
-                      onClick={() => {
+                    <ImportPreviewCard
+                      title="CC Switch 导入预览"
+                      description="确认目标客户端、端点和模型后，直接唤起 CC Switch 完成导入。"
+                      icon={<ClientIcon id="cc-switch" size={20} />}
+                      link={ccSwitchUrl}
+                      disabled={!hasUsableKey}
+                      onCopied={() => handleImportLinkCopied('CC Switch')}
+                      onLaunch={() => {
                         window.open(ccSwitchUrl, '_blank')
                         showToast(t('docs.quickStart.launchedToast', { name: 'CC Switch' }), 'success')
                       }}
-                      className="gap-1.5"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t('docs.quickStart.launch')}
-                    </Button>
+                    />
                   </>
                 )}
                 {activeToolTab === 'cherry-studio' && (
@@ -731,19 +892,18 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
                         />
                       </FieldBox>
                     </div>
-                    <CodeBlock label="Cherry Studio 导入链接" content={cherryConfig} lang="bash" />
-                    <Button
-                      type="button"
-                      disabled={!selectedKey && !firstKey}
-                      onClick={() => {
+                    <ImportPreviewCard
+                      title="Cherry Studio 导入预览"
+                      description="使用当前端点和 API Key 生成 Provider 导入链接。"
+                      icon={<ClientIcon id="cherry-studio" size={20} />}
+                      link={cherryConfig}
+                      disabled={!hasUsableKey}
+                      onCopied={() => handleImportLinkCopied('Cherry Studio')}
+                      onLaunch={() => {
                         window.open(cherryConfig, '_blank')
                         showToast(t('docs.quickStart.launchedToast', { name: 'Cherry Studio' }), 'success')
                       }}
-                      className="gap-1.5"
-                    >
-                      <ExternalLink className="size-3.5" />
-                      {t('docs.quickStart.launch')}
-                    </Button>
+                    />
                   </>
                 )}
               </div>
@@ -927,7 +1087,7 @@ set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
         </div>
 
         <aside className="relative hidden xl:block">
-          <div className="absolute -top-16 right-0">
+          <div className="absolute -top-11 right-0">
             <Button variant="outline" size="sm" onClick={() => void handleCopyMarkdown()} disabled={copyingMd} className="gap-1.5">
               {copyingMd ? <Check className="size-3.5 text-emerald-500" /> : <Copy className="size-3.5" />}
               {t('docs.copyMarkdown')}

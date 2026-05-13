@@ -1,13 +1,26 @@
 import { useEffect, useState } from 'react'
-import { createHighlighter, type Highlighter } from 'shiki'
+import type { HighlighterCore } from 'shiki/core'
 
-let highlighterPromise: Promise<Highlighter> | null = null
+let highlighterPromise: Promise<HighlighterCore> | null = null
+const htmlCache = new Map<string, string>()
+const MAX_CACHE_SIZE = 80
 
 function getHighlighter() {
   if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      themes: ['github-light-default', 'dark-plus'],
-      langs: ['json', 'toml', 'shellscript', 'python'],
+    highlighterPromise = Promise.all([
+      import('shiki/core'),
+      import('shiki/engine/javascript'),
+      import('shiki/themes/dark-plus.mjs'),
+      import('shiki/themes/github-light-default.mjs'),
+      import('shiki/langs/json.mjs'),
+      import('shiki/langs/shellscript.mjs'),
+      import('shiki/langs/toml.mjs'),
+    ]).then(([core, engine, darkPlus, githubLight, json, shellscript, toml]) => {
+      return core.createHighlighterCore({
+        themes: [githubLight.default, darkPlus.default],
+        langs: [json.default, toml.default, shellscript.default],
+        engine: engine.createJavaScriptRegexEngine(),
+      })
     })
   }
   return highlighterPromise
@@ -30,15 +43,33 @@ export function useHighlightedHtml(code: string, lang?: string) {
     let cancelled = false
     const resolvedLang = lang === 'bash' || lang === 'shell' || lang === 'curl' ? 'shellscript' : (lang || 'text')
 
+    if (!code) {
+      setHtml('')
+      return () => { cancelled = true }
+    }
+    const isDark = document.documentElement.classList.contains('dark')
+    const cacheKey = `${isDark ? 'dark' : 'light'}:${resolvedLang}:${code}`
+    const cached = htmlCache.get(cacheKey)
+    if (cached) {
+      setHtml(cached)
+      return () => { cancelled = true }
+    }
+
     getHighlighter().then((hl) => {
       if (cancelled) return
       try {
-        const isDark = document.documentElement.classList.contains('dark')
         const result = hl.codeToHtml(code, {
           lang: resolvedLang,
           theme: isDark ? 'dark-plus' : 'github-light-default',
         })
-        setHtml(isDark ? result : tuneLightTheme(result))
+        const cacheKey = `${isDark ? 'dark' : 'light'}:${resolvedLang}:${code}`
+        const nextHtml = isDark ? result : tuneLightTheme(result)
+        if (htmlCache.size >= MAX_CACHE_SIZE) {
+          const firstKey = htmlCache.keys().next().value
+          if (firstKey) htmlCache.delete(firstKey)
+        }
+        htmlCache.set(cacheKey, nextHtml)
+        setHtml(nextHtml)
       } catch {
         setHtml('')
       }
