@@ -769,7 +769,7 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 	if err != nil {
 		durationMs := int(time.Since(start).Milliseconds())
 		log.Printf("[image-studio] job=%d failed duration=%s stage=build_request error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(err.Error()))
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 	log.Printf("[image-studio] job=%d upstream request model=%s size=%s quality=%s format=%s body_bytes=%d prompt_chars=%d prompt=%q",
@@ -795,7 +795,7 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 		if buildErr != nil {
 			durationMs := int(time.Since(start).Milliseconds())
 			log.Printf("[image-studio] job=%d failed duration=%s stage=build_jpeg_fallback error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(buildErr.Error()))
-			_ = h.db.MarkImageJobFailed(context.Background(), jobID, buildErr.Error(), durationMs)
+			_ = h.db.MarkImageJobFailed(ctx, jobID, buildErr.Error(), durationMs)
 			return
 		}
 		fallbackStyledPrompt := proxy.AppendImageStyleToPrompt(fallbackReq.Prompt, fallbackReq.Style)
@@ -814,7 +814,7 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 			req = fallbackReq
 			rawBody = fallbackBody
 			if paramsJSON, marshalErr := json.Marshal(fallbackReq); marshalErr == nil {
-				if updateErr := h.db.UpdateImageGenerationJobParamsJSON(context.Background(), jobID, string(paramsJSON)); updateErr != nil {
+				if updateErr := h.db.UpdateImageGenerationJobParamsJSON(ctx, jobID, string(paramsJSON)); updateErr != nil {
 					logImageJobError(jobID, updateErr)
 				}
 			}
@@ -836,7 +836,7 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 			upstreamStatus,
 			security.SanitizeLog(err.Error()),
 		)
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 	log.Printf("[image-studio] job=%d upstream completed duration=%s upstream_status=%d response_bytes=%d",
@@ -846,18 +846,18 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 		len(responseJSON),
 	)
 
-	assets, err := h.saveImageJobAssets(context.Background(), jobID, req, responseJSON)
+	assets, err := h.saveImageJobAssets(ctx, jobID, req, responseJSON)
 	if err != nil {
 		log.Printf("[image-studio] job=%d failed duration=%s stage=save_assets error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(err.Error()))
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 	if len(assets) == 0 {
 		log.Printf("[image-studio] job=%d failed duration=%s stage=save_assets error=%s", jobID, imageLogDuration(durationMs), "上游未返回图片")
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, "上游未返回图片", durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, "上游未返回图片", durationMs)
 		return
 	}
-	if err := h.db.MarkImageJobSucceeded(context.Background(), jobID, durationMs); err != nil {
+	if err := h.db.MarkImageJobSucceeded(ctx, jobID, durationMs); err != nil {
 		logImageJobError(jobID, err)
 	}
 	log.Printf("[image-studio] job=%d succeeded duration=%s assets=%d total_bytes=%d first_size=%s dir=%s",
@@ -873,6 +873,9 @@ func (h *Handler) runImageGenerationJob(jobID int64, req imageGenerationJobPaylo
 func buildAdminImageEditRequest(req imageGenerationJobPayload) ([]byte, error) {
 	if len(req.InputImages) == 0 {
 		return nil, fmt.Errorf("input_images is required for image edit")
+	}
+	if len(req.InputImages) > proxy.MaxImageEditInputCount {
+		return nil, fmt.Errorf("too many input images (%d, max %d)", len(req.InputImages), proxy.MaxImageEditInputCount)
 	}
 	body := map[string]any{
 		"model":           req.Model,
@@ -918,7 +921,7 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 	if err != nil {
 		durationMs := int(time.Since(start).Milliseconds())
 		log.Printf("[image-studio] job=%d failed mode=edit duration=%s stage=build_request error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(err.Error()))
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 
@@ -927,6 +930,41 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 		imageProxy = proxy.NewHandler(h.store, h.db, nil, nil)
 	}
 	responseJSON, upstreamStatus, err := imageProxy.GenerateImageEditForAdmin(ctx, rawBody, apiKey)
+	if shouldFallbackImageJobToJPEG(req, upstreamStatus, err) {
+		pngErr := err
+		pngStatus := upstreamStatus
+		fallbackReq := jpegFallbackImageJobRequest(req)
+		fallbackBody, buildErr := buildAdminImageEditRequest(fallbackReq)
+		if buildErr != nil {
+			durationMs := int(time.Since(start).Milliseconds())
+			log.Printf("[image-studio] job=%d failed mode=edit duration=%s stage=build_jpeg_fallback error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(buildErr.Error()))
+			_ = h.db.MarkImageJobFailed(ctx, jobID, buildErr.Error(), durationMs)
+			return
+		}
+		log.Printf("[image-studio] job=%d png_failed_retrying_jpeg mode=edit upstream_status=%d error=%s",
+			jobID,
+			pngStatus,
+			security.SanitizeLog(pngErr.Error()),
+		)
+		responseJSON, upstreamStatus, err = imageProxy.GenerateImageEditForAdmin(ctx, fallbackBody, apiKey)
+		if err == nil {
+			req = fallbackReq
+			rawBody = fallbackBody
+			if paramsJSON, marshalErr := json.Marshal(fallbackReq); marshalErr == nil {
+				if updateErr := h.db.UpdateImageGenerationJobParamsJSON(ctx, jobID, string(paramsJSON)); updateErr != nil {
+					logImageJobError(jobID, updateErr)
+				}
+			}
+			log.Printf("[image-studio] job=%d jpeg_fallback_succeeded mode=edit original_status=%d upstream_status=%d body_bytes=%d",
+				jobID,
+				pngStatus,
+				upstreamStatus,
+				len(rawBody),
+			)
+		} else {
+			err = fmt.Errorf("PNG 生成失败: %s；自动改用 JPEG 重试仍失败: %w", pngErr.Error(), err)
+		}
+	}
 	durationMs := int(time.Since(start).Milliseconds())
 	if err != nil {
 		log.Printf("[image-studio] job=%d failed mode=edit duration=%s upstream_status=%d error=%s",
@@ -935,7 +973,7 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 			upstreamStatus,
 			security.SanitizeLog(err.Error()),
 		)
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 	log.Printf("[image-studio] job=%d upstream completed mode=edit duration=%s upstream_status=%d response_bytes=%d",
@@ -945,18 +983,18 @@ func (h *Handler) runImageEditJob(jobID int64, req imageGenerationJobPayload, ap
 		len(responseJSON),
 	)
 
-	assets, err := h.saveImageJobAssets(context.Background(), jobID, req, responseJSON)
+	assets, err := h.saveImageJobAssets(ctx, jobID, req, responseJSON)
 	if err != nil {
 		log.Printf("[image-studio] job=%d failed mode=edit duration=%s stage=save_assets error=%s", jobID, imageLogDuration(durationMs), security.SanitizeLog(err.Error()))
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, err.Error(), durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, err.Error(), durationMs)
 		return
 	}
 	if len(assets) == 0 {
 		log.Printf("[image-studio] job=%d failed mode=edit duration=%s stage=save_assets error=%s", jobID, imageLogDuration(durationMs), "上游未返回图片")
-		_ = h.db.MarkImageJobFailed(context.Background(), jobID, "上游未返回图片", durationMs)
+		_ = h.db.MarkImageJobFailed(ctx, jobID, "上游未返回图片", durationMs)
 		return
 	}
-	if err := h.db.MarkImageJobSucceeded(context.Background(), jobID, durationMs); err != nil {
+	if err := h.db.MarkImageJobSucceeded(ctx, jobID, durationMs); err != nil {
 		logImageJobError(jobID, err)
 	}
 	log.Printf("[image-studio] job=%d succeeded mode=edit duration=%s assets=%d total_bytes=%d first_size=%s",

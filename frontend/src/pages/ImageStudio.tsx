@@ -437,22 +437,38 @@ export default function ImageStudio() {
   const handleImageFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
+    const MAX_INPUT_IMAGES = 10
+    const currentCount = inputImageDataURLs.length
+    if (currentCount >= MAX_INPUT_IMAGES) {
+      showToast(t('images.maxInputImages', { max: MAX_INPUT_IMAGES }), 'error')
+      e.target.value = ''
+      return
+    }
+    const remaining = MAX_INPUT_IMAGES - currentCount
+    const filesToRead = Array.from(files).slice(0, remaining)
     const reads: Promise<string>[] = []
-    for (let i = 0; i < files.length; i++) {
+    for (let i = 0; i < filesToRead.length; i++) {
       reads.push(new Promise<string>((resolve, reject) => {
         const reader = new FileReader()
         reader.onload = () => resolve(reader.result as string)
         reader.onerror = () => reject(new Error('Failed to read file'))
-        reader.readAsDataURL(files[i])
+        reader.readAsDataURL(filesToRead[i])
       }))
     }
-    Promise.all(reads).then(dataURLs => {
-      setInputImageDataURLs(prev => [...prev, ...dataURLs])
-    }).catch(() => {
-      showToast(t('images.loadFailed'), 'error')
+    Promise.allSettled(reads).then(results => {
+      const dataURLs: string[] = []
+      for (const r of results) {
+        if (r.status === 'fulfilled') dataURLs.push(r.value)
+      }
+      if (dataURLs.length > 0) {
+        setInputImageDataURLs(prev => [...prev, ...dataURLs])
+      }
+      if (dataURLs.length < results.length) {
+        showToast(t('images.loadFailed'), 'error')
+      }
     })
     e.target.value = ''
-  }, [showToast, t])
+  }, [showToast, t, inputImageDataURLs])
 
   useEffect(() => {
     if (view && !IMAGE_VIEWS.includes(view as ImageView)) {
@@ -820,6 +836,7 @@ export default function ImageStudio() {
     const params = jobParams(job)
     const nextModel = params.model || 'gpt-image-2'
     const nextSize = normalizeImageSizeForModel(nextModel, params.size || 'auto')
+    const isEditJob = params.input_images && params.input_images.length > 0
     setPrompt(job.prompt)
     setModel(nextModel)
     setSize(nextSize)
@@ -829,6 +846,10 @@ export default function ImageStudio() {
     setUpscale(normalizeUpscale(params.upscale))
     setStyle(params.style || '')
     setSelectedTemplateId(params.template_id ? Number(params.template_id) : null)
+    if (isEditJob) {
+      setImageToImageMode(true)
+      setInputImageDataURLs(params.input_images!)
+    }
     navigate('/images/studio')
     void submitJob({
       prompt: job.prompt,
@@ -841,6 +862,7 @@ export default function ImageStudio() {
       style: params.style,
       api_key_id: apiKeyID ? Number(apiKeyID) : undefined,
       template_id: params.template_id ? Number(params.template_id) : undefined,
+      input_images: isEditJob ? params.input_images : undefined,
     })
   }
 

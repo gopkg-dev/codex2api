@@ -263,7 +263,7 @@ The standard `.env.example` declares `DATABASE_DRIVER=postgres` and `CACHE_DRIVE
 
 Runtime business settings are stored in the database `SystemSettings` table and can be updated from the admin settings page.
 
-Examples include `MaxConcurrency`, `GlobalRPM`, `TestModel`, `TestConcurrency`, `ProxyURL`, `PgMaxConns`, `RedisPoolSize`, `AdminSecret`, and auto-cleanup switches.
+Examples include `MaxConcurrency`, `GlobalRPM`, `TestModel`, `TestConcurrency`, `ProxyURL`, `PgMaxConns`, `RedisPoolSize`, `AdminSecret`, `SchedulerMode`, and auto-cleanup switches.
 
 Default settings are written automatically on first startup.
 
@@ -285,8 +285,10 @@ Default settings are written automatically on first startup.
 | `POST /v1/responses` | Responses style endpoint |
 | `POST /v1/images/generations` | OpenAI Images generation endpoint |
 | `POST /v1/images/edits` | OpenAI Images edit endpoint |
-| `GET /v1/models` | List available models |
+| `GET /v1/models` | List available models (includes gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex, gpt-image-2, etc.) |
 | `GET /health` | Health check |
+
+> **Pricing**: gpt-5.5 is billed at $5.00/M input and $30.00/M output (standard tier). Priority tier: $12.50/M input, $75.00/M output. Other models follow pricing rules in the billing engine.
 
 See [API.md](docs/API.md) for full request formats, response formats, and error codes.
 
@@ -362,7 +364,7 @@ Open `/admin/` in a browser.
 | Accounts | `/admin/accounts` | Import, test, batch actions, scheduler state |
 | API Keys | `/admin/api-keys` | API key creation, inspection, deletion, and credential management |
 | Proxies | `/admin/proxies` | Proxy pool management, account proxy assignment, connectivity checks |
-| Image Studio | `/admin/images/studio` | Text-to-image, prompt templates, task history, server-side image library |
+| Image Studio | `/admin/images/studio` | Text-to-image, image-to-image, prompt templates, task history, server-side image library |
 | Prompt Filter | `/admin/prompt-filter/overview` | Rules, hit logs, testing, and handling mode configuration |
 | Usage | `/admin/usage` | Request logs, metric cards, charts, log cleanup |
 | Operations | `/admin/ops` | Runtime monitoring and system overview |
@@ -431,6 +433,22 @@ Observability:
 - `GET /api/admin/accounts` shows health tier, scheduler score, and penalty details.
 - `GET /api/admin/ops/overview` shows runtime and connection pool state.
 - `/admin/ops/scheduler` provides the scheduler board.
+
+**Scheduler mode** (`scheduler_mode`, via Admin Settings):
+
+| Mode | Behavior |
+| --- | --- |
+| `round_robin` (default) | Round-robin across available accounts per health tier, weighted by dispatch score |
+| `remaining_quota` | Prioritizes accounts with lower usage percent; round-robin for ties |
+
+**Credit accounts** (per-account flags):
+
+When an account has a credit-based billing model instead of a usage-based Free/Pro plan, you can mark it so the scheduler skips usage-window penalties:
+
+| Field | Type | Effect |
+| --- | --- | --- |
+| `credit_enabled` | bool | Mark account as credit-based billing |
+| `credit_skip_usage_window` | bool | When true, skip 7d/5h usage-window penalties for this account |
 
 ---
 

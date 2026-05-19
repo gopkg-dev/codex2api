@@ -882,6 +882,9 @@ func (a *Account) IsAvailable() bool {
 
 // usageExhaustedLocked 判断 Free 账号 7d 用量是否已耗尽（需持有 mu 读锁）
 func (a *Account) usageExhaustedLocked() bool {
+	if a.CreditSkipUsageWindow {
+		return false
+	}
 	return a.UsagePercent7dValid && strings.EqualFold(a.PlanType, "free") && a.UsagePercent7d >= 100
 }
 
@@ -1854,6 +1857,7 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 			RecoveryProbeIntervalMinutes:     30,
 			ProxyURL:                         "",
 			MaxRateLimitRetries:              1,
+			SchedulerMode:                    "round_robin",
 		}
 	}
 	s := &Store{
@@ -2859,6 +2863,10 @@ func (s *Store) Release(acc *Account) {
 // SetMaxConcurrency 动态更新每账号并发上限
 func (s *Store) SetMaxConcurrency(n int) {
 	atomic.StoreInt64(&s.maxConcurrency, int64(n))
+	// Update existing scheduler's base limit in-place before full rebuild.
+	if scheduler := s.getFastScheduler(); scheduler != nil {
+		scheduler.SetBaseLimit(int64(n))
+	}
 	s.recomputeAllAccountSchedulerState()
 	s.rebuildFastScheduler()
 }

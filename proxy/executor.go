@@ -201,7 +201,7 @@ func getPooledClient(account *auth.Account, proxyURL string) *http.Client {
 	entry := &poolEntry{
 		client: &http.Client{
 			Transport: transport,
-			Timeout:   0,
+			Timeout:   10 * time.Minute,
 		},
 	}
 	entry.touch()

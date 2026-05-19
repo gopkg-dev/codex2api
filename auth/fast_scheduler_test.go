@@ -791,3 +791,144 @@ func TestFastSchedulerRelease(t *testing.T) {
 		t.Fatalf("ActiveRequests after Release() = %d, want 0", got)
 	}
 }
+
+func TestFastSchedulerRemainingQuotaPicksLowestUsage(t *testing.T) {
+	highUsage := &Account{
+		DBID:                1,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      90,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 4,
+		DynamicConcurrencyLimit:  4,
+	}
+	lowUsage := &Account{
+		DBID:                2,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      10,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 4,
+		DynamicConcurrencyLimit:  4,
+	}
+	midUsage := &Account{
+		DBID:                3,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      50,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 4,
+		DynamicConcurrencyLimit:  4,
+	}
+
+	scheduler := NewFastScheduler(4, "remaining_quota")
+	scheduler.Rebuild([]*Account{highUsage, lowUsage, midUsage})
+
+	got := scheduler.Acquire()
+	if got == nil {
+		t.Fatal("Acquire() returned nil")
+	}
+	defer scheduler.Release(got)
+
+	if got.DBID != lowUsage.DBID {
+		t.Fatalf("Acquire() picked dbID=%d, want lowest-usage account %d", got.DBID, lowUsage.DBID)
+	}
+}
+
+func TestFastSchedulerRemainingQuotaSortOrder(t *testing.T) {
+	a1 := &Account{
+		DBID:                1,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      70,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 1,
+		DynamicConcurrencyLimit:  1,
+	}
+	a2 := &Account{
+		DBID:                2,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      30,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 1,
+		DynamicConcurrencyLimit:  1,
+	}
+	a3 := &Account{
+		DBID:                3,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      90,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 1,
+		DynamicConcurrencyLimit:  1,
+	}
+
+	scheduler := NewFastScheduler(1, "remaining_quota")
+	scheduler.Rebuild([]*Account{a1, a2, a3})
+
+	// Acquire all without releasing; concurrency limit 1 forces
+	// iteration through the usage-ascending sorted order.
+	var got []int64
+	for i := 0; i < 3; i++ {
+		acc := scheduler.Acquire()
+		if acc == nil {
+			t.Fatalf("Acquire() returned nil at iteration %d", i)
+		}
+		got = append(got, acc.DBID)
+	}
+
+	// Expect ascending usage: a2 (30%), a1 (70%), a3 (90%)
+	want := []int64{2, 1, 3}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("remaining_quota sort order mismatch: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestFastSchedulerRemainingQuotaTieBreakProvenThenDBID(t *testing.T) {
+	unproven := &Account{
+		DBID:                1,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      50,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 2,
+		DynamicConcurrencyLimit:  2,
+	}
+	unproven.TotalRequests = 0 // not proven
+
+	proven := &Account{
+		DBID:                2,
+		AccessToken:         "token",
+		Status:              StatusReady,
+		HealthTier:          HealthTierHealthy,
+		UsagePercent7d:      50,
+		UsagePercent7dValid: true,
+		BaseConcurrencyEffective: 2,
+		DynamicConcurrencyLimit:  2,
+	}
+	proven.TotalRequests = 11 // proven (>10)
+
+	scheduler := NewFastScheduler(4, "remaining_quota")
+	scheduler.Rebuild([]*Account{unproven, proven})
+
+	// Both same usage; proven account should sort first.
+	got := scheduler.Acquire()
+	if got == nil {
+		t.Fatal("Acquire() returned nil")
+	}
+	defer scheduler.Release(got)
+
+	if got.DBID != proven.DBID {
+		t.Fatalf("Acquire() picked dbID=%d, want proven tie-breaker account %d", got.DBID, proven.DBID)
+	}
+}

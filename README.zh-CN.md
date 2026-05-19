@@ -209,6 +209,7 @@ docker compose -f docker-compose.sqlite.local.yml logs -f codex2api
 - SQLite 镜像版容器名：`codex2api-sqlite`
 - SQLite 本地构建版容器名：`codex2api-sqlite-local`
 - SQLite 轻量版只启动 `codex2api` 单容器，数据保存在 `/data/codex2api.db`
+- **SQLite compose 文件默认绑定 `127.0.0.1`，仅本机可访问。** 如需暴露给外部，请在 `.env` 中设置 `BIND_HOST=0.0.0.0` 或修改 compose 文件中的端口绑定。标准版 compose 文件默认绑定 `0.0.0.0`（所有网络接口）。
 - 生图工作台图库默认保存在 `/data/images`，标准版和 SQLite 版 Docker 配置都会持久化 `/data`
 - `docker compose down` 默认不会删除命名卷；只有 `docker compose down -v`、`docker volume rm` 或 `docker volume prune` 才会删除持久化数据
 - 不同部署模式的数据卷彼此隔离；切换 compose 文件后看到空数据，通常是切到了另一组卷，而不是原卷被自动删除
@@ -313,7 +314,7 @@ Vite 会自动代理 `/api` 和 `/health` 到后端，开发时访问 `http://lo
 
 以下参数**保存在数据库 `SystemSettings` 中**，通过管理台设置页面修改：
 
-`MaxConcurrency`、`GlobalRPM`、`TestModel`、`TestConcurrency`、`ProxyURL`、`PgMaxConns`、`RedisPoolSize`、`AdminSecret`、自动清理开关等。
+`MaxConcurrency`、`GlobalRPM`、`TestModel`、`TestConcurrency`、`ProxyURL`、`PgMaxConns`、`RedisPoolSize`、`AdminSecret`、`SchedulerMode`、自动清理开关等。
 
 首次启动时程序会自动写入默认设置。
 
@@ -335,8 +336,10 @@ Vite 会自动代理 `/api` 和 `/health` 到后端，开发时访问 `http://lo
 | `POST /v1/responses` | Responses 风格入口 |
 | `POST /v1/images/generations` | OpenAI Images 生成入口 |
 | `POST /v1/images/edits` | OpenAI Images 编辑入口 |
-| `GET /v1/models` | 返回可用模型列表 |
+| `GET /v1/models` | 返回可用模型列表（含 gpt-5.5、gpt-5.4、gpt-5.4-mini、gpt-5.3-codex、gpt-image-2 等） |
 | `GET /health` | 健康检查 |
+
+> **计费提示**：gpt-5.5 标准 tier 计费为 $5.00/M 输入 / $30.00/M 输出，priority tier 为 $12.50/M 输入 / $75.00/M 输出。其他模型按 billing 引擎规则计费。
 
 > 完整请求/响应格式、错误码参见 [API 文档](docs/API.md)。
 
@@ -412,7 +415,7 @@ curl -X POST http://localhost:8080/api/admin/accounts/import \
 | 账号管理 | `/admin/accounts` | 导入、测试、批量处理、调度信息查看 |
 | API 密钥 | `/admin/api-keys` | API Key 创建、查看、删除与调用凭据管理 |
 | 代理管理 | `/admin/proxies` | 代理池维护、账号代理分配与连通性管理 |
-| 生图工作台 | `/admin/images/studio` | 文生图、提示词模板、任务历史和服务器图库 |
+| 生图工作台 | `/admin/images/studio` | 文生图、图生图、提示词模板、任务历史和服务器图库 |
 | Prompt 检查 | `/admin/prompt-filter/overview` | Prompt 规则、触发日志、测试和处理模式配置 |
 | 使用统计 | `/admin/usage` | 请求日志、统计卡片、图表、日志清空 |
 | 运维概览 | `/admin/ops` | 运行态监控与系统概览 |
@@ -494,6 +497,22 @@ curl -X POST http://localhost:8080/api/admin/accounts/import \
 - `GET /api/admin/accounts` — 健康层级、调度分、惩罚拆解
 - `GET /api/admin/ops/overview` — 系统运行态与连接池概览
 - `/admin/ops/scheduler` — 前端调度看板
+
+**调度模式**（`scheduler_mode`，通过管理后台设置）：
+
+| 模式 | 行为 |
+| --- | --- |
+| `round_robin`（默认） | 按健康层级轮询可用账号，权重按调度分排序 |
+| `remaining_quota` | 优先使用用量的账号；用量相同时轮询 |
+
+**信用账号**（单账号标记）：
+
+对采用信用计费而非 Free/Pro 用量计费的账号，可标记为信用账号以跳过用量窗口惩罚：
+
+| 字段 | 类型 | 作用 |
+| --- | --- | --- |
+| `credit_enabled` | bool | 标记账号为信用计费模式 |
+| `credit_skip_usage_window` | bool | 开启后跳过 7 天/5 小时用量窗口惩罚 |
 
 ---
 

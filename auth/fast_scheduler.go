@@ -80,6 +80,39 @@ func (s *FastScheduler) SetSchedulerMode(mode string) {
 		mode = "round_robin"
 	}
 	s.schedulerMode = mode
+
+	// Re-sort all tier buckets according to the new mode.
+	for _, tier := range fastSchedulerTierOrder {
+		entries := s.buckets[tier]
+		if len(entries) == 0 {
+			continue
+		}
+		if mode == "remaining_quota" {
+			sort.SliceStable(entries, func(i, j int) bool {
+				usageI := entries[i].acc.usagePercentForScheduling()
+				usageJ := entries[j].acc.usagePercentForScheduling()
+				if usageI == usageJ {
+					if entries[i].proven != entries[j].proven {
+						return entries[i].proven
+					}
+					return entries[i].dbID < entries[j].dbID
+				}
+				return usageI < usageJ
+			})
+			} else {
+				sort.SliceStable(entries, func(i, j int) bool {
+					if entries[i].dispatchScore == entries[j].dispatchScore {
+						if entries[i].proven != entries[j].proven {
+							return entries[i].proven
+						}
+						return entries[i].dbID < entries[j].dbID
+					}
+					return entries[i].dispatchScore > entries[j].dispatchScore
+				})
+			}
+		s.buckets[tier] = entries
+		s.rebuildPositionsLocked(tier)
+	}
 }
 
 func (s *FastScheduler) SchedulerMode() string {
@@ -150,15 +183,29 @@ func (s *FastScheduler) Rebuild(accounts []*Account) {
 		if len(entries) == 0 {
 			continue
 		}
-		sort.SliceStable(entries, func(i, j int) bool {
-			if entries[i].dispatchScore == entries[j].dispatchScore {
-				if entries[i].proven != entries[j].proven {
-					return entries[i].proven
+		if s.schedulerMode == "remaining_quota" {
+			sort.SliceStable(entries, func(i, j int) bool {
+				usageI := entries[i].acc.usagePercentForScheduling()
+				usageJ := entries[j].acc.usagePercentForScheduling()
+				if usageI == usageJ {
+					if entries[i].proven != entries[j].proven {
+						return entries[i].proven
+					}
+					return entries[i].dbID < entries[j].dbID
 				}
-				return entries[i].dbID < entries[j].dbID
-			}
-			return entries[i].dispatchScore > entries[j].dispatchScore
-		})
+				return usageI < usageJ
+			})
+		} else {
+			sort.SliceStable(entries, func(i, j int) bool {
+				if entries[i].dispatchScore == entries[j].dispatchScore {
+					if entries[i].proven != entries[j].proven {
+						return entries[i].proven
+					}
+					return entries[i].dbID < entries[j].dbID
+				}
+				return entries[i].dispatchScore > entries[j].dispatchScore
+			})
+		}
 		s.buckets[tier] = entries
 		s.rebuildPositionsLocked(tier)
 	}
@@ -221,6 +268,7 @@ func (s *FastScheduler) AcquireExcludingWithFilter(apiKeyID int64, exclude map[i
 	baseLimit := s.baseLimit
 	var zeroCursor atomic.Uint64
 	for {
+		zeroCursor.Store(0)
 		changed := false
 		for tierIdx, tier := range fastSchedulerTierOrder {
 			bucket := s.buckets[tier]

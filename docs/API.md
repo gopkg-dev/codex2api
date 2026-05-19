@@ -457,6 +457,36 @@ data: [DONE]
 }
 ```
 
+#### PATCH /api/admin/accounts/:id/credit
+
+更新账号信用设置。
+
+**请求:**
+
+```json
+{
+  "credit_enabled": true,
+  "credit_skip_usage_window": true
+}
+```
+
+**参数说明:**
+
+| 参数                       | 类型  | 必填 | 说明                                     |
+| -------------------------- | ----- | ---- | ---------------------------------------- |
+| credit_enabled             | bool  | 否   | 标记账号为信用计费模式，省略时保持原值   |
+| credit_skip_usage_window   | bool  | 否   | 跳过 7 天/5 小时用量窗口惩罚，省略时保持原值 |
+
+**响应:**
+
+```json
+{
+  "message": "信用设置已更新",
+  "credit_enabled": true,
+  "credit_skip_usage_window": true
+}
+```
+
 #### POST /api/admin/accounts
 
 添加 Refresh Token 账号（支持批量）。
@@ -1491,10 +1521,10 @@ curl -X DELETE "http://localhost:8080/api/admin/account-groups/1?force=true" \
 
 ## 支持模型
 
-| 模型                | 说明                                    |
-| ------------------- | --------------------------------------- |
-| gpt-5.5             | 最新旗舰模型                            |
-| gpt-5.4             | 旗舰模型                                |
+| 模型                | 说明                                                        |
+| ------------------- | ----------------------------------------------------------- |
+| gpt-5.5             | 最新旗舰模型。计费：$5.00/M 输入 / $30.00/M 输出（标准），priority 分别为 $12.50/M / $75.00/M |
+| gpt-5.4             | 旗舰模型                                                    |
 | gpt-5.4-mini        | 轻量版                                  |
 | gpt-5.3-codex       | 较新版本                                |
 | gpt-5.3-codex-spark | Codex Spark 模型，仅 Pro 订阅账号可调用 |
