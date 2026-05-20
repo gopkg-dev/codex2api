@@ -215,6 +215,8 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		SiteName:                         database.DefaultSiteName,
 		MaxConcurrency:                   2,
 		GlobalRPM:                        0,
+		IPConcurrencyLimit:               0,
+		IPRPMLimit:                       0,
 		TestModel:                        "gpt-5.4",
 		TestConcurrency:                  50,
 		BackgroundRefreshIntervalMinutes: 2,
@@ -236,5 +238,8 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		UsageLogFlushIntervalSeconds:     5,
 		StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 		StreamFlushIntervalMS:            20,
+		ImageStorageConfig:               "{}",
+		FilterLocalFallbackResponse:      true,
+		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 	}
 }

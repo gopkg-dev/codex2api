@@ -69,6 +69,8 @@ func main() {
 			SiteName:                         database.DefaultSiteName,
 			MaxConcurrency:                   2,
 			GlobalRPM:                        0,
+			IPConcurrencyLimit:               0,
+			IPRPMLimit:                       0,
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -95,6 +97,8 @@ func main() {
 			StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 			StreamFlushIntervalMS:            20,
 			ImageStorageConfig:               "{}",
+			FilterLocalFallbackResponse:      true,
+			APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 		}
 		_ = db.UpdateSystemSettings(context.Background(), settings)
 	} else if err != nil {
@@ -103,6 +107,8 @@ func main() {
 			SiteName:                         database.DefaultSiteName,
 			MaxConcurrency:                   2,
 			GlobalRPM:                        0,
+			IPConcurrencyLimit:               0,
+			IPRPMLimit:                       0,
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -126,6 +132,8 @@ func main() {
 			StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 			StreamFlushIntervalMS:            20,
 			ImageStorageConfig:               "{}",
+			FilterLocalFallbackResponse:      true,
+			APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 		}
 	} else {
 		log.Printf("已加载持久化业务设置: ProxyURL=%s, MaxConcurrency=%d, GlobalRPM=%d, PgMaxConns=%d, RedisPoolSize=%d",
@@ -216,6 +224,8 @@ func main() {
 
 	// 全局 RPM 限流器
 	rateLimiter := proxy.NewRateLimiter(settings.GlobalRPM)
+	rateLimiter.UpdateIPConcurrencyLimit(settings.IPConcurrencyLimit)
+	rateLimiter.UpdateIPRPMLimit(settings.IPRPMLimit)
 	adminHandler := admin.NewHandler(store, db, tc, rateLimiter, cfg.AdminSecret)
 	// 初始化 admin handler 的连接池设置跟踪
 	adminHandler.SetPoolSizes(settings.PgMaxConns, settings.RedisPoolSize)
@@ -256,6 +266,12 @@ func main() {
 	r.Use(rateLimiter.Middleware())
 	if settings.GlobalRPM > 0 {
 		log.Printf("全局限流已生效: %d RPM", settings.GlobalRPM)
+	}
+	if settings.IPConcurrencyLimit > 0 {
+		log.Printf("IP 并发限制已生效: %d", settings.IPConcurrencyLimit)
+	}
+	if settings.IPRPMLimit > 0 {
+		log.Printf("IP RPM 限制已生效: %d", settings.IPRPMLimit)
 	}
 	log.Printf("单账号并发上限: %d", settings.MaxConcurrency)
 

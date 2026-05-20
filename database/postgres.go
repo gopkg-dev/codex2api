@@ -592,6 +592,8 @@ func (db *DB) migrate(ctx context.Context) error {
 				site_logo          TEXT DEFAULT '',
 				max_concurrency    INT DEFAULT 2,
 			global_rpm         INT DEFAULT 0,
+			ip_concurrency_limit INT DEFAULT 0,
+			ip_rpm_limit       INT DEFAULT 0,
 			test_model         VARCHAR(100) DEFAULT 'gpt-5.4',
 			test_concurrency   INT DEFAULT 50,
 			proxy_url          VARCHAR(500) DEFAULT '',
@@ -615,6 +617,8 @@ func (db *DB) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_account_model_cooldowns_reset_at ON account_model_cooldowns(reset_at);
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_name TEXT DEFAULT 'CodexProxy';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS site_logo TEXT DEFAULT '';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_concurrency_limit INT DEFAULT 0;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_rpm_limit INT DEFAULT 0;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_clean_unauthorized BOOLEAN DEFAULT FALSE;
@@ -652,6 +656,8 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_policy VARCHAR(20) DEFAULT 'immediate';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_interval_ms INT DEFAULT 20;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS image_storage_config TEXT DEFAULT '{}';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS filter_local_fallback_response BOOLEAN DEFAULT TRUE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_maintenance_config TEXT DEFAULT '{}';
 
 			CREATE TABLE IF NOT EXISTS prompt_filter_logs (
 				id               SERIAL PRIMARY KEY,
@@ -1079,6 +1085,8 @@ type SystemSettings struct {
 	SiteLogo                         string
 	MaxConcurrency                   int
 	GlobalRPM                        int
+	IPConcurrencyLimit               int
+	IPRPMLimit                       int
 	TestModel                        string
 	TestConcurrency                  int
 	ProxyURL                         string
@@ -1119,6 +1127,8 @@ type SystemSettings struct {
 	StreamFlushPolicy                string
 	StreamFlushIntervalMS            int
 	ImageStorageConfig               string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
+	FilterLocalFallbackResponse      bool
+	APIMaintenanceConfig             string // JSON: {"enabled":false,"message":"...","routes":{...}}
 }
 
 // GetSystemSettings 加载全局设置
@@ -1126,7 +1136,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	s := &SystemSettings{}
 	err := db.conn.QueryRowContext(ctx, `
 		SELECT COALESCE(site_name, 'CodexProxy'), COALESCE(site_logo, ''),
-		       max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+		       max_concurrency, global_rpm, COALESCE(ip_concurrency_limit, 0), COALESCE(ip_rpm_limit, 0), test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 		       auto_clean_unauthorized, auto_clean_rate_limited, COALESCE(admin_secret, ''), COALESCE(auto_clean_full_usage, false),
 		       COALESCE(proxy_pool_enabled, false),
 		       COALESCE(fast_scheduler_enabled, false),
@@ -1158,11 +1168,13 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(usage_log_flush_interval_seconds, 5),
 		       COALESCE(stream_flush_policy, 'immediate'),
 		       COALESCE(stream_flush_interval_ms, 20),
-		       COALESCE(image_storage_config, '{}')
+		       COALESCE(image_storage_config, '{}'),
+		       COALESCE(filter_local_fallback_response, true),
+		       COALESCE(api_maintenance_config, '{}')
 		FROM system_settings WHERE id = 1
 	`).Scan(
 		&s.SiteName, &s.SiteLogo,
-		&s.MaxConcurrency, &s.GlobalRPM, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
+		&s.MaxConcurrency, &s.GlobalRPM, &s.IPConcurrencyLimit, &s.IPRPMLimit, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
 		&s.AutoCleanUnauthorized, &s.AutoCleanRateLimited, &s.AdminSecret, &s.AutoCleanFullUsage,
 		&s.ProxyPoolEnabled, &s.FastSchedulerEnabled, &s.MaxRetries, &s.MaxRateLimitRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.ModelMapping,
@@ -1174,7 +1186,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.PromptFilterCustomPatterns, &s.PromptFilterDisabledPatterns,
 		&s.ClientCompatMode, &s.CodexMinCLIVersion, &s.UsageLogMode, &s.UsageLogBatchSize,
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
-		&s.ImageStorageConfig,
+		&s.ImageStorageConfig, &s.FilterLocalFallbackResponse, &s.APIMaintenanceConfig,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1188,7 +1200,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error {
 	_, err := db.conn.ExecContext(ctx, `
 			INSERT INTO system_settings (
-				id, site_name, site_logo, max_concurrency, global_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+				id, site_name, site_logo, max_concurrency, global_rpm, ip_concurrency_limit, ip_rpm_limit, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 				auto_clean_unauthorized, auto_clean_rate_limited, admin_secret, auto_clean_full_usage, proxy_pool_enabled,
 				fast_scheduler_enabled, max_retries, max_rate_limit_retries, allow_remote_migration, auto_clean_error, auto_clean_expired, model_mapping,
 				background_refresh_interval_minutes, usage_probe_max_age_minutes, recovery_probe_interval_minutes,
@@ -1197,15 +1209,16 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				prompt_filter_sensitive_words, prompt_filter_custom_patterns, prompt_filter_disabled_patterns,
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
-				image_storage_config,
-				scheduler_mode
+				image_storage_config, scheduler_mode, filter_local_fallback_response, api_maintenance_config
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
 				max_concurrency         = EXCLUDED.max_concurrency,
 				global_rpm              = EXCLUDED.global_rpm,
+				ip_concurrency_limit    = EXCLUDED.ip_concurrency_limit,
+				ip_rpm_limit            = EXCLUDED.ip_rpm_limit,
 				test_model              = EXCLUDED.test_model,
 				test_concurrency        = EXCLUDED.test_concurrency,
 				proxy_url               = EXCLUDED.proxy_url,
@@ -1245,9 +1258,11 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				stream_flush_policy = EXCLUDED.stream_flush_policy,
 				stream_flush_interval_ms = EXCLUDED.stream_flush_interval_ms,
 				image_storage_config = EXCLUDED.image_storage_config,
-				scheduler_mode = EXCLUDED.scheduler_mode
+				scheduler_mode = EXCLUDED.scheduler_mode,
+				filter_local_fallback_response = EXCLUDED.filter_local_fallback_response,
+				api_maintenance_config = EXCLUDED.api_maintenance_config
 		`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
-		s.MaxConcurrency, s.GlobalRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
+		s.MaxConcurrency, s.GlobalRPM, s.IPConcurrencyLimit, s.IPRPMLimit, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, s.AutoCleanFullUsage, s.ProxyPoolEnabled,
 		s.FastSchedulerEnabled, s.MaxRetries, s.MaxRateLimitRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.ModelMapping,
 		s.BackgroundRefreshIntervalMinutes, s.UsageProbeMaxAgeMinutes, s.RecoveryProbeIntervalMinutes,
@@ -1256,7 +1271,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.PromptFilterSensitiveWords, s.PromptFilterCustomPatterns, s.PromptFilterDisabledPatterns,
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
-		s.ImageStorageConfig, s.SchedulerMode)
+		s.ImageStorageConfig, s.SchedulerMode, s.FilterLocalFallbackResponse, s.APIMaintenanceConfig)
 	return err
 }
 

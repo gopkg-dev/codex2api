@@ -288,6 +288,8 @@ export interface SystemSettings {
   site_logo: string
   max_concurrency: number
   global_rpm: number
+  ip_concurrency_limit: number
+  ip_rpm_limit: number
   test_model: string
   test_concurrency: number
   background_refresh_interval_minutes: number
@@ -334,6 +336,12 @@ export interface SystemSettings {
   usage_log_flush_interval_seconds: number
   stream_flush_policy: 'immediate' | 'coalesce' | string
   stream_flush_interval_ms: number
+  filter_local_fallback_response: boolean
+  api_maintenance_enabled: boolean
+  api_maintenance_message: string
+  api_maintenance_sse_randomize: boolean
+  api_maintenance_image_b64_json: string
+  api_maintenance_routes_json: string
   image_storage_backend: 'local' | 's3' | string
   image_s3_endpoint: string
   image_s3_region: string

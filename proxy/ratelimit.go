@@ -3,7 +3,9 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,14 +46,14 @@ type LimitSnapshot struct {
 
 // LimitMetrics 限流指标
 type LimitMetrics struct {
-	TotalRequests   int64     `json:"total_requests"`    // 总请求数
-	AllowedRequests int64     `json:"allowed_requests"`  // 允许请求数
-	BlockedRequests int64     `json:"blocked_requests"`  // 阻塞请求数
-	CurrentRPM      int64     `json:"current_rpm"`       // 当前RPM
-	LimitRPM        int64     `json:"limit_rpm"`         // 限制RPM
-	CooldownLevel   int       `json:"cooldown_level"`    // 当前冷却等级
-	NextResetAt     time.Time `json:"next_reset_at"`     // 下次重置时间
-	LastUpdatedAt   time.Time `json:"last_updated_at"`   // 最后更新时间
+	TotalRequests   int64     `json:"total_requests"`   // 总请求数
+	AllowedRequests int64     `json:"allowed_requests"` // 允许请求数
+	BlockedRequests int64     `json:"blocked_requests"` // 阻塞请求数
+	CurrentRPM      int64     `json:"current_rpm"`      // 当前RPM
+	LimitRPM        int64     `json:"limit_rpm"`        // 限制RPM
+	CooldownLevel   int       `json:"cooldown_level"`   // 当前冷却等级
+	NextResetAt     time.Time `json:"next_reset_at"`    // 下次重置时间
+	LastUpdatedAt   time.Time `json:"last_updated_at"`  // 最后更新时间
 }
 
 // ============ 令牌桶限流器 ============
@@ -61,7 +63,7 @@ type tokenBucket struct {
 	mu         sync.RWMutex
 	tokens     float64
 	maxTokens  float64
-	refillRate float64   // 每秒补充的令牌数
+	refillRate float64 // 每秒补充的令牌数
 	lastRefill time.Time
 }
 
@@ -270,14 +272,14 @@ func (cm *cooldownManager) getState() (level int, blockedAt time.Time, resetAt t
 
 // LevelLimiter 单级别限流器
 type LevelLimiter struct {
-	mu       sync.RWMutex
-	key      string          // 限流键
-	level    RateLimitLevel  // 限流级别
-	bucket   *tokenBucket    // 令牌桶
-	cooldown *cooldownManager // 冷却管理器
-	metrics  LimitMetrics    // 指标
-	enabled  bool            // 是否启用
-	lastAccess atomic.Int64  // 最后访问时间（用于 TTL 清理）
+	mu         sync.RWMutex
+	key        string           // 限流键
+	level      RateLimitLevel   // 限流级别
+	bucket     *tokenBucket     // 令牌桶
+	cooldown   *cooldownManager // 冷却管理器
+	metrics    LimitMetrics     // 指标
+	enabled    bool             // 是否启用
+	lastAccess atomic.Int64     // 最后访问时间（用于 TTL 清理）
 }
 
 // newLevelLimiter 创建单级别限流器
@@ -439,15 +441,15 @@ type EnhancedRateLimiter struct {
 	mu sync.RWMutex
 
 	// 各级别限流器
-	globalLimiter  *LevelLimiter            // 全局限流
+	globalLimiter   *LevelLimiter            // 全局限流
 	accountLimiters map[string]*LevelLimiter // 账号级限流器 (key: accountID)
 	modelLimiters   map[string]*LevelLimiter // 模型级限流器 (key: modelName)
 
 	// 配置
-	globalRPM   int // 全局RPM限制
-	accountRPM  int // 每账号RPM限制
-	modelRPM    int // 每模型RPM限制
-	enabled     bool
+	globalRPM  int // 全局RPM限制
+	accountRPM int // 每账号RPM限制
+	modelRPM   int // 每模型RPM限制
+	enabled    bool
 
 	// 持久化
 	db              *database.DB
@@ -645,7 +647,7 @@ func (erl *EnhancedRateLimiter) GetAllMetrics() map[string]interface{} {
 	defer erl.mu.RUnlock()
 
 	result := map[string]interface{}{
-		"global": erl.globalLimiter.getMetrics(),
+		"global":        erl.globalLimiter.getMetrics(),
 		"total_limited": atomic.LoadInt64(&erl.totalLimited),
 	}
 
@@ -785,13 +787,20 @@ func ComputeCooldown(prevLevel int) (time.Duration, int) {
 
 // RateLimiter 全局限流器（向后兼容）
 type RateLimiter struct {
-	enhanced *EnhancedRateLimiter
+	enhanced                 *EnhancedRateLimiter
+	ipMu                     sync.Mutex
+	ipActive                 map[string]int
+	ipBuckets                map[string]*tokenBucket
+	ipConcurrencyLimitAtomic int64
+	ipRPMLimitAtomic         int64
 }
 
 // NewRateLimiter 创建限流器（向后兼容）
 func NewRateLimiter(rpm int) *RateLimiter {
 	return &RateLimiter{
-		enhanced: NewEnhancedRateLimiter(nil, rpm, 0, 0),
+		enhanced:  NewEnhancedRateLimiter(nil, rpm, 0, 0),
+		ipActive:  make(map[string]int),
+		ipBuckets: make(map[string]*tokenBucket),
 	}
 }
 
@@ -808,6 +817,85 @@ func (rl *RateLimiter) GetRPM() int {
 		return rl.enhanced.globalRPM
 	}
 	return 0
+}
+
+func (rl *RateLimiter) UpdateIPConcurrencyLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	atomic.StoreInt64(&rl.ipConcurrencyLimitAtomic, int64(limit))
+}
+
+func (rl *RateLimiter) GetIPConcurrencyLimit() int {
+	return int(atomic.LoadInt64(&rl.ipConcurrencyLimitAtomic))
+}
+
+func (rl *RateLimiter) UpdateIPRPMLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	old := atomic.SwapInt64(&rl.ipRPMLimitAtomic, int64(limit))
+	if old != int64(limit) {
+		rl.ipMu.Lock()
+		rl.ipBuckets = make(map[string]*tokenBucket)
+		rl.ipMu.Unlock()
+	}
+}
+
+func (rl *RateLimiter) GetIPRPMLimit() int {
+	return int(atomic.LoadInt64(&rl.ipRPMLimitAtomic))
+}
+
+func (rl *RateLimiter) allowIPRPM(ip string) bool {
+	limit := rl.GetIPRPMLimit()
+	if limit <= 0 || ip == "" {
+		return true
+	}
+	rl.ipMu.Lock()
+	if rl.ipBuckets == nil {
+		rl.ipBuckets = make(map[string]*tokenBucket)
+	}
+	bucket := rl.ipBuckets[ip]
+	if bucket == nil {
+		bucket = newTokenBucket(limit)
+		rl.ipBuckets[ip] = bucket
+	}
+	rl.ipMu.Unlock()
+	return bucket.allow()
+}
+
+func (rl *RateLimiter) tryAcquireIP(ip string) bool {
+	limit := rl.GetIPConcurrencyLimit()
+	if limit <= 0 || ip == "" {
+		return true
+	}
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	if rl.ipActive == nil {
+		rl.ipActive = make(map[string]int)
+	}
+	if rl.ipActive[ip] >= limit {
+		return false
+	}
+	rl.ipActive[ip]++
+	return true
+}
+
+func (rl *RateLimiter) releaseIP(ip string) {
+	if rl.GetIPConcurrencyLimit() <= 0 || ip == "" {
+		return
+	}
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	if rl.ipActive == nil {
+		return
+	}
+	count := rl.ipActive[ip]
+	if count <= 1 {
+		delete(rl.ipActive, ip)
+		return
+	}
+	rl.ipActive[ip] = count - 1
 }
 
 // Middleware 返回 Gin 中间件（向后兼容）
@@ -833,8 +921,52 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		clientIP := rateLimitClientIP(c)
+		if rateLimitIsV1Path(path) {
+			if !rl.allowIPRPM(clientIP) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"error": gin.H{
+						"message": "同一 IP 请求过于频繁，请稍后重试",
+						"type":    "rate_limit_error",
+						"code":    "ip_rpm_limit_exceeded",
+					},
+				})
+				c.Abort()
+				return
+			}
+			if !rl.tryAcquireIP(clientIP) {
+				c.JSON(http.StatusTooManyRequests, gin.H{
+					"error": gin.H{
+						"message": "同一 IP 并发请求过多，请稍后重试",
+						"type":    "rate_limit_error",
+						"code":    "ip_concurrency_limit_exceeded",
+					},
+				})
+				c.Abort()
+				return
+			}
+			defer rl.releaseIP(clientIP)
+		}
 		c.Next()
 	}
+}
+
+func rateLimitIsV1Path(path string) bool {
+	return path == "/v1" || strings.HasPrefix(path, "/v1/")
+}
+
+func rateLimitClientIP(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if ip := c.ClientIP(); ip != "" {
+		return ip
+	}
+	host, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return c.Request.RemoteAddr
 }
 
 // GetEnhancedLimiter 获取增强型限流器
@@ -846,8 +978,8 @@ func (rl *RateLimiter) GetEnhancedLimiter() *EnhancedRateLimiter {
 
 // RateLimitError 限流错误
 type RateLimitError struct {
-	Level   RateLimitLevel
-	Key     string
+	Level      RateLimitLevel
+	Key        string
 	RetryAfter time.Duration
 }
 

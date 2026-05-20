@@ -3556,6 +3556,8 @@ type settingsResponse struct {
 	SiteLogo                         string `json:"site_logo"`
 	MaxConcurrency                   int    `json:"max_concurrency"`
 	GlobalRPM                        int    `json:"global_rpm"`
+	IPConcurrencyLimit               int    `json:"ip_concurrency_limit"`
+	IPRPMLimit                       int    `json:"ip_rpm_limit"`
 	TestModel                        string `json:"test_model"`
 	TestConcurrency                  int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes int    `json:"background_refresh_interval_minutes"`
@@ -3601,6 +3603,12 @@ type settingsResponse struct {
 	UsageLogFlushIntervalSeconds     int    `json:"usage_log_flush_interval_seconds"`
 	StreamFlushPolicy                string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            int    `json:"stream_flush_interval_ms"`
+	FilterLocalFallbackResponse      bool   `json:"filter_local_fallback_response"`
+	APIMaintenanceEnabled            bool   `json:"api_maintenance_enabled"`
+	APIMaintenanceMessage            string `json:"api_maintenance_message"`
+	APIMaintenanceSSERandomize       bool   `json:"api_maintenance_sse_randomize"`
+	APIMaintenanceImageB64JSON       string `json:"api_maintenance_image_b64_json"`
+	APIMaintenanceRoutesJSON         string `json:"api_maintenance_routes_json"`
 	ImageStorageBackend              string `json:"image_storage_backend"`
 	ImageS3Endpoint                  string `json:"image_s3_endpoint"`
 	ImageS3Region                    string `json:"image_s3_region"`
@@ -3616,6 +3624,8 @@ type updateSettingsReq struct {
 	SiteLogo                         *string `json:"site_logo"`
 	MaxConcurrency                   *int    `json:"max_concurrency"`
 	GlobalRPM                        *int    `json:"global_rpm"`
+	IPConcurrencyLimit               *int    `json:"ip_concurrency_limit"`
+	IPRPMLimit                       *int    `json:"ip_rpm_limit"`
 	TestModel                        *string `json:"test_model"`
 	TestConcurrency                  *int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes *int    `json:"background_refresh_interval_minutes"`
@@ -3655,6 +3665,12 @@ type updateSettingsReq struct {
 	UsageLogFlushIntervalSeconds     *int    `json:"usage_log_flush_interval_seconds"`
 	StreamFlushPolicy                *string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            *int    `json:"stream_flush_interval_ms"`
+	FilterLocalFallbackResponse      *bool   `json:"filter_local_fallback_response"`
+	APIMaintenanceEnabled            *bool   `json:"api_maintenance_enabled"`
+	APIMaintenanceMessage            *string `json:"api_maintenance_message"`
+	APIMaintenanceSSERandomize       *bool   `json:"api_maintenance_sse_randomize"`
+	APIMaintenanceImageB64JSON       *string `json:"api_maintenance_image_b64_json"`
+	APIMaintenanceRoutesJSON         *string `json:"api_maintenance_routes_json"`
 	ImageStorageBackend              *string `json:"image_storage_backend"`
 	ImageS3Endpoint                  *string `json:"image_s3_endpoint"`
 	ImageS3Region                    *string `json:"image_s3_region"`
@@ -3749,6 +3765,10 @@ func (h *Handler) GetSettings(c *gin.Context) {
 	}
 	promptFilterCfg := h.store.GetPromptFilterConfig()
 	runtimeCfg := proxy.CurrentRuntimeSettings()
+	maintenanceRoutesJSON := "{}"
+	if raw, err := json.Marshal(runtimeCfg.APIMaintenance.Routes); err == nil {
+		maintenanceRoutesJSON = string(raw)
+	}
 	imgCfg := imagestore.CurrentConfig()
 	imgPrefix := strings.TrimSuffix(imgCfg.Prefix, "/")
 	c.JSON(http.StatusOK, settingsResponse{
@@ -3756,6 +3776,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		SiteLogo:                         branding.SiteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -3800,6 +3822,12 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		UsageLogFlushIntervalSeconds:     h.db.GetUsageLogFlushIntervalSeconds(),
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
+		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
+		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
+		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
+		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,
+		APIMaintenanceRoutesJSON:         maintenanceRoutesJSON,
 		ImageStorageBackend:              imgCfg.Backend,
 		ImageS3Endpoint:                  imgCfg.Endpoint,
 		ImageS3Region:                    imgCfg.Region,
@@ -3874,6 +3902,27 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		}
 		h.rateLimiter.UpdateRPM(v)
 		log.Printf("设置已更新: global_rpm = %d", v)
+	}
+
+	if req.IPConcurrencyLimit != nil {
+		v := *req.IPConcurrencyLimit
+		if v < 0 {
+			v = 0
+		}
+		if v > 10000 {
+			v = 10000
+		}
+		h.rateLimiter.UpdateIPConcurrencyLimit(v)
+		log.Printf("设置已更新: ip_concurrency_limit = %d", v)
+	}
+
+	if req.IPRPMLimit != nil {
+		v := *req.IPRPMLimit
+		if v < 0 {
+			v = 0
+		}
+		h.rateLimiter.UpdateIPRPMLimit(v)
+		log.Printf("设置已更新: ip_rpm_limit = %d", v)
 	}
 
 	if req.TestModel != nil && *req.TestModel != "" {
@@ -4067,6 +4116,41 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.StreamFlushIntervalMS = *req.StreamFlushIntervalMS
 		log.Printf("设置已更新: stream_flush_interval_ms = %d", runtimeCfg.StreamFlushIntervalMS)
 	}
+	if req.FilterLocalFallbackResponse != nil {
+		runtimeCfg.FilterLocalFallbackResponse = *req.FilterLocalFallbackResponse
+		log.Printf("设置已更新: filter_local_fallback_response = %t", runtimeCfg.FilterLocalFallbackResponse)
+	}
+	maintenanceCfg := runtimeCfg.APIMaintenance
+	if req.APIMaintenanceEnabled != nil {
+		maintenanceCfg.Enabled = *req.APIMaintenanceEnabled
+		log.Printf("设置已更新: api_maintenance.enabled = %t", maintenanceCfg.Enabled)
+	}
+	if req.APIMaintenanceMessage != nil {
+		maintenanceCfg.Message = *req.APIMaintenanceMessage
+		log.Printf("设置已更新: api_maintenance.message")
+	}
+	if req.APIMaintenanceSSERandomize != nil {
+		maintenanceCfg.SSERandomize = *req.APIMaintenanceSSERandomize
+		log.Printf("设置已更新: api_maintenance.sse_randomize = %t", maintenanceCfg.SSERandomize)
+	}
+	if req.APIMaintenanceImageB64JSON != nil {
+		maintenanceCfg.ImageB64JSON = *req.APIMaintenanceImageB64JSON
+		log.Printf("设置已更新: api_maintenance.image_b64_json (长度=%d)", len(maintenanceCfg.ImageB64JSON))
+	}
+	if req.APIMaintenanceRoutesJSON != nil {
+		var routes map[string]proxy.APIMaintenanceRouteConfig
+		rawRoutes := strings.TrimSpace(*req.APIMaintenanceRoutesJSON)
+		if rawRoutes == "" {
+			rawRoutes = "{}"
+		}
+		if err := json.Unmarshal([]byte(rawRoutes), &routes); err != nil {
+			writeError(c, http.StatusBadRequest, "API 维护路径覆盖 JSON 无效: "+err.Error())
+			return
+		}
+		maintenanceCfg.Routes = routes
+		log.Printf("设置已更新: api_maintenance.routes")
+	}
+	runtimeCfg.APIMaintenance = proxy.NormalizeAPIMaintenanceConfig(maintenanceCfg)
 	runtimeCfg = proxy.ApplyRuntimeSettings(runtimeCfg)
 
 	usageLogChanged := false
@@ -4236,6 +4320,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                         siteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -4276,6 +4362,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		ImageStorageConfig:               imgConfigJSON,
+		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
 	})
 	if err != nil {
 		log.Printf("无法持久化保存设置: %v", err)
@@ -4293,12 +4381,18 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if adminAuthSource == "env" {
 		adminSecretForDisplay = ""
 	}
+	maintenanceRoutesJSON := "{}"
+	if raw, err := json.Marshal(runtimeCfg.APIMaintenance.Routes); err == nil {
+		maintenanceRoutesJSON = string(raw)
+	}
 
 	c.JSON(http.StatusOK, settingsResponse{
 		SiteName:                         siteName,
 		SiteLogo:                         siteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
+		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -4344,6 +4438,12 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		UsageLogFlushIntervalSeconds:     usageLogFlushIntervalSeconds,
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
+		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
+		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
+		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
+		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,
+		APIMaintenanceRoutesJSON:         maintenanceRoutesJSON,
 		ImageStorageBackend:              imgCfg.Backend,
 		ImageS3Endpoint:                  imgCfg.Endpoint,
 		ImageS3Region:                    imgCfg.Region,

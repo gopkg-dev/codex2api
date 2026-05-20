@@ -17,6 +17,7 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
+	"github.com/codex2api/proxy"
 	"github.com/gin-gonic/gin"
 )
 
@@ -302,6 +303,112 @@ func TestUpdateAPIKeyRefreshesRuntimeStoreAndCache(t *testing.T) {
 	}
 	if _, ok, err := tc.GetRuntime(ctx, adminAPIKeyCountNamespace, "all"); err != nil || ok {
 		t.Fatalf("runtime api key count cache after update ok=%v err=%v, want miss", ok, err)
+	}
+}
+
+func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	tc := cache.NewMemory(1)
+	defer tc.Close()
+	settings := &database.SystemSettings{
+		SiteName:                         database.DefaultSiteName,
+		MaxConcurrency:                   2,
+		TestModel:                        "gpt-5.4",
+		TestConcurrency:                  50,
+		BackgroundRefreshIntervalMinutes: 2,
+		UsageProbeMaxAgeMinutes:          10,
+		RecoveryProbeIntervalMinutes:     30,
+		PgMaxConns:                       50,
+		RedisPoolSize:                    30,
+		ClientCompatMode:                 proxy.ClientCompatModePreserve,
+		CodexMinCLIVersion:               "0.118.0",
+		UsageLogMode:                     database.UsageLogModeFull,
+		UsageLogBatchSize:                200,
+		UsageLogFlushIntervalSeconds:     5,
+		StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
+		StreamFlushIntervalMS:            20,
+		ImageStorageConfig:               "{}",
+		IPConcurrencyLimit:               2,
+		IPRPMLimit:                       20,
+		FilterLocalFallbackResponse:      true,
+		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
+	}
+	if err := db.UpdateSystemSettings(context.Background(), settings); err != nil {
+		t.Fatalf("UpdateSystemSettings 返回错误: %v", err)
+	}
+
+	store := auth.NewStore(db, tc, settings)
+	handler := NewHandler(store, db, tc, proxy.NewRateLimiter(0), "")
+	body := `{
+		"ip_concurrency_limit": 4,
+		"ip_rpm_limit": 9,
+		"filter_local_fallback_response": false,
+		"api_maintenance_enabled": true,
+		"api_maintenance_message": "维护中",
+		"api_maintenance_sse_randomize": true,
+		"api_maintenance_image_b64_json": "abc",
+		"api_maintenance_routes_json": "{\"/v1/responses\":{\"enabled\":true,\"message\":\"Responses 维护\"}}"
+	}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/admin/settings", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.UpdateSettings(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload settingsResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.FilterLocalFallbackResponse {
+		t.Fatal("FilterLocalFallbackResponse = true, want false")
+	}
+	if !payload.APIMaintenanceEnabled || payload.APIMaintenanceMessage != "维护中" || !payload.APIMaintenanceSSERandomize {
+		t.Fatalf("maintenance response = %#v", payload)
+	}
+	if payload.IPConcurrencyLimit != 4 {
+		t.Fatalf("IPConcurrencyLimit = %d, want 4", payload.IPConcurrencyLimit)
+	}
+	if payload.IPRPMLimit != 9 {
+		t.Fatalf("IPRPMLimit = %d, want 9", payload.IPRPMLimit)
+	}
+
+	gotSettings, err := db.GetSystemSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSystemSettings 返回错误: %v", err)
+	}
+	if gotSettings.FilterLocalFallbackResponse {
+		t.Fatal("persisted FilterLocalFallbackResponse = true, want false")
+	}
+	if gotSettings.IPConcurrencyLimit != 4 {
+		t.Fatalf("persisted IPConcurrencyLimit = %d, want 4", gotSettings.IPConcurrencyLimit)
+	}
+	if gotSettings.IPRPMLimit != 9 {
+		t.Fatalf("persisted IPRPMLimit = %d, want 9", gotSettings.IPRPMLimit)
+	}
+	if got := handler.rateLimiter.GetIPConcurrencyLimit(); got != 4 {
+		t.Fatalf("runtime IPConcurrencyLimit = %d, want 4", got)
+	}
+	if got := handler.rateLimiter.GetIPRPMLimit(); got != 9 {
+		t.Fatalf("runtime IPRPMLimit = %d, want 9", got)
+	}
+	runtimeCfg := proxy.CurrentRuntimeSettings()
+	if runtimeCfg.FilterLocalFallbackResponse {
+		t.Fatal("runtime FilterLocalFallbackResponse = true, want false")
+	}
+	if !runtimeCfg.APIMaintenance.Enabled || runtimeCfg.APIMaintenance.Message != "维护中" {
+		t.Fatalf("runtime maintenance = %#v", runtimeCfg.APIMaintenance)
 	}
 }
 

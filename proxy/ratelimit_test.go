@@ -3,10 +3,13 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // ============ Token Bucket Tests ============
@@ -167,7 +170,7 @@ func TestCooldownManager_MaxLevel(t *testing.T) {
 	cm := newCooldownManager()
 
 	// 尝试超过最大等级
-	for i := 0; i < len(cooldownDurations) + 10; i++ {
+	for i := 0; i < len(cooldownDurations)+10; i++ {
 		cm.enterCooldown()
 	}
 
@@ -563,6 +566,150 @@ func TestRateLimiter_Middleware(t *testing.T) {
 	rl := NewRateLimiter(1000)
 	_ = rl.Middleware()
 	// 如果到这里没有panic，测试通过
+}
+
+func TestRateLimiterLimitsConcurrentRequestsByIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(0)
+	rl.UpdateIPConcurrencyLimit(1)
+
+	router := gin.New()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	router.Use(rl.Middleware())
+	router.GET("/v1/responses", func(c *gin.Context) {
+		close(started)
+		<-release
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	firstDone := make(chan int, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+		req.RemoteAddr = "203.0.113.10:1234"
+		router.ServeHTTP(recorder, req)
+		firstDone <- recorder.Code
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not enter handler")
+	}
+
+	secondRecorder := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	secondReq.RemoteAddr = "203.0.113.10:5678"
+	router.ServeHTTP(secondRecorder, secondReq)
+
+	if secondRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	}
+
+	close(release)
+	select {
+	case code := <-firstDone:
+		if code != http.StatusOK {
+			t.Fatalf("first status = %d, want %d", code, http.StatusOK)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish")
+	}
+}
+
+func TestRateLimiterIPConcurrencyOnlyAppliesToV1(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(0)
+	rl.UpdateIPConcurrencyLimit(1)
+
+	router := gin.New()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startedOnce sync.Once
+	var requests int32
+	router.Use(rl.Middleware())
+	router.GET("/backend-api/codex/responses", func(c *gin.Context) {
+		count := atomic.AddInt32(&requests, 1)
+		startedOnce.Do(func() { close(started) })
+		if count == 1 {
+			<-release
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	firstDone := make(chan int, 1)
+	go func() {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/backend-api/codex/responses", nil)
+		req.RemoteAddr = "203.0.113.10:1234"
+		router.ServeHTTP(recorder, req)
+		firstDone <- recorder.Code
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first request did not enter handler")
+	}
+
+	secondRecorder := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodGet, "/backend-api/codex/responses", nil)
+	secondReq.RemoteAddr = "203.0.113.10:5678"
+	router.ServeHTTP(secondRecorder, secondReq)
+
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusOK, secondRecorder.Body.String())
+	}
+
+	close(release)
+	select {
+	case code := <-firstDone:
+		if code != http.StatusOK {
+			t.Fatalf("first status = %d, want %d", code, http.StatusOK)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first request did not finish")
+	}
+}
+
+func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(0)
+	rl.UpdateIPRPMLimit(1)
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.GET("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	router.GET("/backend-api/codex/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	firstRecorder := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	firstReq.RemoteAddr = "203.0.113.11:1234"
+	router.ServeHTTP(firstRecorder, firstReq)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first /v1 status = %d, want %d", firstRecorder.Code, http.StatusOK)
+	}
+
+	secondRecorder := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	secondReq.RemoteAddr = "203.0.113.11:5678"
+	router.ServeHTTP(secondRecorder, secondReq)
+	if secondRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("second /v1 status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	}
+
+	backendRecorder := httptest.NewRecorder()
+	backendReq := httptest.NewRequest(http.MethodGet, "/backend-api/codex/responses", nil)
+	backendReq.RemoteAddr = "203.0.113.11:9012"
+	router.ServeHTTP(backendRecorder, backendReq)
+	if backendRecorder.Code != http.StatusOK {
+		t.Fatalf("backend status = %d, want %d; body=%s", backendRecorder.Code, http.StatusOK, backendRecorder.Body.String())
+	}
 }
 
 // ============ ComputeCooldown Tests ============

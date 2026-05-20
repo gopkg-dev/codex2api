@@ -31,6 +31,21 @@ import { ExternalLink, RefreshCw, Save, Trash2, Upload, X } from 'lucide-react'
 
 type ModelMappingEntry = [string, string]
 
+type MaintenanceRouteConfig = {
+  enabled?: boolean
+  message?: string
+  image_b64_json?: string
+}
+
+const MAINTENANCE_ROUTE_PATHS = [
+  '/v1/chat/completions',
+  '/v1/responses',
+  '/v1/responses/compact',
+  '/v1/messages',
+  '/v1/images/generations',
+  '/v1/images/edits',
+] as const
+
 const getDefaultModelMappingEntries = (): ModelMappingEntry[] =>
   Object.entries(DEFAULT_CLAUDE_MODEL_MAP) as ModelMappingEntry[]
 
@@ -191,6 +206,37 @@ function SettingField({
   )
 }
 
+function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+        checked ? 'border-slate-950 bg-slate-950 dark:border-white dark:bg-white' : 'border-border bg-muted'
+      )}
+    >
+      <span
+        className={cn(
+          'inline-block size-5 rounded-full bg-background shadow-sm transition-transform',
+          checked ? 'translate-x-5 dark:bg-slate-950' : 'translate-x-0.5'
+        )}
+      />
+    </button>
+  )
+}
+
 function StatusTile({
   label,
   children,
@@ -232,6 +278,66 @@ function dataURLByteLength(dataURL: string) {
     return Math.floor((data.length * 3) / 4) - padding
   }
   return new Blob([decodeURIComponent(data)]).size
+}
+
+function extractBase64FromDataURL(dataURL: string) {
+  const commaIndex = dataURL.indexOf(',')
+  return commaIndex === -1 ? dataURL.trim() : dataURL.slice(commaIndex + 1).trim()
+}
+
+function inferBase64ImageMimeType(b64: string) {
+  const trimmed = b64.trim()
+  if (trimmed.startsWith('/9j/')) return 'image/jpeg'
+  if (trimmed.startsWith('R0lG')) return 'image/gif'
+  if (trimmed.startsWith('UklGR')) return 'image/webp'
+  return 'image/png'
+}
+
+function getMaintenanceImagePreview(b64: string) {
+  const trimmed = b64.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('data:image/')) return trimmed
+  return `data:${inferBase64ImageMimeType(trimmed)};base64,${trimmed}`
+}
+
+function parseMaintenanceRoutesJSON(value: string): Record<string, MaintenanceRouteConfig> {
+  try {
+    const parsed = JSON.parse(value || '{}')
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const result: Record<string, MaintenanceRouteConfig> = {}
+    for (const [path, raw] of Object.entries(parsed)) {
+      if (!MAINTENANCE_ROUTE_PATHS.includes(path as typeof MAINTENANCE_ROUTE_PATHS[number])) continue
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const item = raw as Record<string, unknown>
+      result[path] = {
+        enabled: typeof item.enabled === 'boolean' ? item.enabled : undefined,
+        message: typeof item.message === 'string' ? item.message : '',
+        image_b64_json: typeof item.image_b64_json === 'string' ? item.image_b64_json : '',
+      }
+    }
+    return result
+  } catch {
+    return {}
+  }
+}
+
+function stringifyMaintenanceRoutes(routes: Record<string, MaintenanceRouteConfig>) {
+  const result: Record<string, MaintenanceRouteConfig> = {}
+  for (const path of MAINTENANCE_ROUTE_PATHS) {
+    const route = routes[path]
+    if (!route) continue
+    const message = route.message?.trim() ?? ''
+    const imageB64JSON = route.image_b64_json?.trim() ?? ''
+    const enabled = route.enabled
+    if (enabled === false || message || imageB64JSON) {
+      result[path] = {
+        ...(enabled === false ? { enabled: false } : {}),
+        ...(message ? { message } : {}),
+        ...(imageB64JSON ? { image_b64_json: imageB64JSON } : {}),
+      }
+    }
+  }
+  return JSON.stringify(result, null, 2)
 }
 
 function readFileAsDataURL(file: File) {
@@ -373,6 +479,8 @@ export default function Settings() {
     site_logo: '',
     max_concurrency: 2,
     global_rpm: 0,
+    ip_concurrency_limit: 0,
+    ip_rpm_limit: 0,
     test_model: '',
     test_concurrency: 50,
     background_refresh_interval_minutes: 2,
@@ -416,6 +524,12 @@ export default function Settings() {
     usage_log_flush_interval_seconds: 5,
     stream_flush_policy: 'immediate',
     stream_flush_interval_ms: 20,
+    filter_local_fallback_response: true,
+    api_maintenance_enabled: false,
+    api_maintenance_message: '系统维护中，请稍后重试。',
+    api_maintenance_sse_randomize: false,
+    api_maintenance_image_b64_json: '',
+    api_maintenance_routes_json: '{}',
     image_storage_backend: 'local',
     image_s3_endpoint: '',
     image_s3_region: '',
@@ -434,6 +548,7 @@ export default function Settings() {
   const [modelsSourceURL, setModelsSourceURL] = useState('')
   const [syncingModels, setSyncingModels] = useState(false)
   const logoFileInputRef = useRef<HTMLInputElement>(null)
+  const maintenanceImageInputRef = useRef<HTMLInputElement>(null)
   const { toast, showToast } = useToast()
 
   const loadSettingsData = useCallback(async () => {
@@ -513,6 +628,27 @@ export default function Settings() {
     }
   }
 
+  const handleMaintenanceImageUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      showToast(t('settings.apiMaintenanceImageInvalidType'), 'error')
+      return
+    }
+
+    try {
+      const result = await readFileAsDataURL(file)
+      setSettingsForm((f) => ({
+        ...f,
+        api_maintenance_image_b64_json: extractBase64FromDataURL(result),
+      }))
+      showToast(t('settings.apiMaintenanceImageSelected'))
+    } catch {
+      showToast(t('settings.siteLogoCompressionFailed'), 'error')
+    }
+  }
+
   const handleTestImageStorage = async () => {
     setTestingImageStorage(true)
     try {
@@ -560,6 +696,22 @@ export default function Settings() {
   const canConfigureRemoteMigration = settingsForm.admin_auth_source === 'env' || settingsForm.admin_secret.trim() !== ''
   const saveButtonLabel = savingSettings ? t('common.saving') : t('settings.saveSettings')
   const siteLogoPreview = sanitizeBrandingLogo(settingsForm.site_logo) || DEFAULT_SITE_LOGO
+  const maintenanceImagePreview = getMaintenanceImagePreview(settingsForm.api_maintenance_image_b64_json)
+  const maintenanceRoutes = useMemo(
+    () => parseMaintenanceRoutesJSON(settingsForm.api_maintenance_routes_json),
+    [settingsForm.api_maintenance_routes_json]
+  )
+  const updateMaintenanceRoute = useCallback((path: string, patch: MaintenanceRouteConfig) => {
+    setSettingsForm((current) => {
+      const routes = parseMaintenanceRoutesJSON(current.api_maintenance_routes_json)
+      const nextRoute = { ...(routes[path] ?? {}), ...patch }
+      routes[path] = nextRoute
+      return {
+        ...current,
+        api_maintenance_routes_json: stringifyMaintenanceRoutes(routes),
+      }
+    })
+  }, [])
   const visibleModelItems = useMemo(() => {
     if (modelItems.length > 0) {
       return modelItems
@@ -648,6 +800,23 @@ export default function Settings() {
                     min={0}
                     value={settingsForm.global_rpm}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, global_rpm: parseInt(e.target.value) || 0 }))}
+                  />
+                </SettingField>
+                <SettingField label={t('settings.ipConcurrencyLimit')} description={t('settings.ipConcurrencyLimitRange')}>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10000}
+                    value={settingsForm.ip_concurrency_limit}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, ip_concurrency_limit: parseInt(e.target.value) || 0 }))}
+                  />
+                </SettingField>
+                <SettingField label={t('settings.ipRpmLimit')} description={t('settings.ipRpmLimitRange')}>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={settingsForm.ip_rpm_limit}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, ip_rpm_limit: parseInt(e.target.value) || 0 }))}
                   />
                 </SettingField>
                 <SettingField label={t('settings.maxRetries')} description={t('settings.maxRetriesRange')}>
@@ -790,6 +959,127 @@ export default function Settings() {
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setSettingsForm(f => ({ ...f, stream_flush_interval_ms: parseInt(e.target.value) || 20 }))}
                 />
               </SettingField>
+            </div>
+          </SettingsCard>
+
+          <SettingsCard title={t('settings.apiSafetyMaintenance')} description={t('settings.apiSafetyMaintenanceDesc')}>
+            <div className="space-y-5">
+              <div className="grid gap-5 xl:grid-cols-[minmax(520px,1fr)_320px]">
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-foreground">{t('settings.filterLocalFallbackResponse')}</div>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('settings.filterLocalFallbackResponseDesc')}</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={settingsForm.filter_local_fallback_response}
+                      onChange={(checked) => setSettingsForm((f) => ({ ...f, filter_local_fallback_response: checked }))}
+                      label={t('settings.filterLocalFallbackResponse')}
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-foreground">{t('settings.apiMaintenanceEnabled')}</div>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('settings.apiMaintenanceEnabledDesc')}</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={settingsForm.api_maintenance_enabled}
+                      onChange={(checked) => setSettingsForm((f) => ({ ...f, api_maintenance_enabled: checked }))}
+                      label={t('settings.apiMaintenanceEnabled')}
+                    />
+                  </div>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-foreground">{t('settings.apiMaintenanceSSERandomize')}</div>
+                      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('settings.apiMaintenanceSSERandomizeDesc')}</p>
+                    </div>
+                    <ToggleSwitch
+                      checked={settingsForm.api_maintenance_sse_randomize}
+                      onChange={(checked) => setSettingsForm((f) => ({ ...f, api_maintenance_sse_randomize: checked }))}
+                      label={t('settings.apiMaintenanceSSERandomize')}
+                    />
+                  </div>
+                  <div className="border-t border-border pt-4">
+                    <SettingField label={t('settings.apiMaintenanceMessage')} description={t('settings.apiMaintenanceMessageDesc')}>
+                      <textarea
+                        className="w-full rounded-md border border-input bg-background px-3 py-3 text-sm leading-relaxed outline-none ring-offset-background placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        value={settingsForm.api_maintenance_message}
+                        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSettingsForm(f => ({ ...f, api_maintenance_message: e.target.value }))}
+                      />
+                    </SettingField>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <div className="text-sm font-semibold text-foreground">{t('settings.apiMaintenanceImageB64JSON')}</div>
+                    <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('settings.apiMaintenanceImageB64JSONDesc')}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => maintenanceImageInputRef.current?.click()}>
+                      <Upload className="size-4" />
+                      {t('settings.apiMaintenanceImageSelect')}
+                    </Button>
+                    <Button type="button" variant="ghost" size="sm" onClick={() => setSettingsForm(f => ({ ...f, api_maintenance_image_b64_json: '' }))}>
+                      <X className="size-4" />
+                      {t('settings.apiMaintenanceImageClear')}
+                    </Button>
+                  </div>
+                  <input
+                    ref={maintenanceImageInputRef}
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"
+                    className="hidden"
+                    onChange={handleMaintenanceImageUpload}
+                  />
+                  <div className="flex h-[220px] w-full items-center justify-center rounded-lg border border-border bg-muted/15 p-4">
+                    {maintenanceImagePreview ? (
+                      <img
+                        src={maintenanceImagePreview}
+                        alt={t('settings.apiMaintenanceImagePreview')}
+                        className="max-h-[180px] max-w-[260px] rounded-lg object-contain shadow-sm"
+                      />
+                    ) : (
+                      <div className="text-center text-sm text-muted-foreground">{t('settings.apiMaintenanceImageEmpty')}</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 border-t border-border pt-4">
+              <div className="mb-3">
+                <div className="text-sm font-semibold text-foreground">{t('settings.apiMaintenanceRoutes')}</div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{t('settings.apiMaintenanceRoutesDesc')}</p>
+              </div>
+              <div className="grid gap-3 xl:grid-cols-2">
+                {MAINTENANCE_ROUTE_PATHS.map((path) => {
+                  const route = maintenanceRoutes[path] ?? {}
+                  const enabled = route.enabled !== false
+                  return (
+                    <div key={path} className="space-y-3 rounded-lg border border-border bg-muted/15 p-3">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="truncate font-mono text-sm font-semibold text-foreground">{path}</div>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                            {enabled ? t('settings.apiMaintenanceRouteEnabledDesc') : t('settings.apiMaintenanceRouteDisabledDesc')}
+                          </p>
+                        </div>
+                        <ToggleSwitch
+                          checked={enabled}
+                          onChange={(checked) => updateMaintenanceRoute(path, { enabled: checked ? undefined : false })}
+                          label={t('settings.apiMaintenanceRouteToggle', { path })}
+                        />
+                      </div>
+                      <Input
+                        value={route.message ?? ''}
+                        placeholder={t('settings.apiMaintenanceRouteMessagePlaceholder')}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => updateMaintenanceRoute(path, { message: e.target.value })}
+                      />
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </SettingsCard>
 

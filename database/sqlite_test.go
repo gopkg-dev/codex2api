@@ -262,6 +262,60 @@ func TestSQLiteUsageLogsHasAPIKeyColumns(t *testing.T) {
 	}
 }
 
+func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New sqlite 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	settings := &SystemSettings{
+		SiteName:                     DefaultSiteName,
+		MaxConcurrency:               2,
+		TestModel:                    "gpt-5.4",
+		TestConcurrency:              50,
+		PgMaxConns:                   50,
+		RedisPoolSize:                30,
+		ClientCompatMode:             "preserve",
+		CodexMinCLIVersion:           "0.118.0",
+		UsageLogMode:                 UsageLogModeFull,
+		UsageLogBatchSize:            200,
+		UsageLogFlushIntervalSeconds: 5,
+		StreamFlushPolicy:            "immediate",
+		StreamFlushIntervalMS:        20,
+		ImageStorageConfig:           "{}",
+		IPConcurrencyLimit:           3,
+		IPRPMLimit:                   7,
+		FilterLocalFallbackResponse:  true,
+		APIMaintenanceConfig:         `{"enabled":true,"message":"维护中"}`,
+	}
+
+	if err := db.UpdateSystemSettings(context.Background(), settings); err != nil {
+		t.Fatalf("UpdateSystemSettings 返回错误: %v", err)
+	}
+
+	got, err := db.GetSystemSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetSystemSettings 返回错误: %v", err)
+	}
+	if got == nil {
+		t.Fatal("settings is nil")
+	}
+	if !got.FilterLocalFallbackResponse {
+		t.Fatal("FilterLocalFallbackResponse = false, want true")
+	}
+	if got.APIMaintenanceConfig != `{"enabled":true,"message":"维护中"}` {
+		t.Fatalf("APIMaintenanceConfig = %q", got.APIMaintenanceConfig)
+	}
+	if got.IPConcurrencyLimit != 3 {
+		t.Fatalf("IPConcurrencyLimit = %d, want 3", got.IPConcurrencyLimit)
+	}
+	if got.IPRPMLimit != 7 {
+		t.Fatalf("IPRPMLimit = %d, want 7", got.IPRPMLimit)
+	}
+}
+
 func TestUsageLogModeErrorsSkipsSuccessfulLogs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 

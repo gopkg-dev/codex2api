@@ -25,10 +25,12 @@ const (
 )
 
 type RuntimeSettings struct {
-	ClientCompatMode      string
-	CodexMinCLIVersion    string
-	StreamFlushPolicy     string
-	StreamFlushIntervalMS int
+	ClientCompatMode            string
+	CodexMinCLIVersion          string
+	StreamFlushPolicy           string
+	StreamFlushIntervalMS       int
+	FilterLocalFallbackResponse bool
+	APIMaintenance              APIMaintenanceConfig
 }
 
 var runtimeSettings atomic.Value // stores RuntimeSettings
@@ -39,10 +41,12 @@ func init() {
 
 func DefaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
-		ClientCompatMode:      defaultClientCompatMode,
-		CodexMinCLIVersion:    defaultCodexMinCLIVersion,
-		StreamFlushPolicy:     defaultStreamFlushPolicy,
-		StreamFlushIntervalMS: defaultStreamFlushIntervalMS,
+		ClientCompatMode:            defaultClientCompatMode,
+		CodexMinCLIVersion:          defaultCodexMinCLIVersion,
+		StreamFlushPolicy:           defaultStreamFlushPolicy,
+		StreamFlushIntervalMS:       defaultStreamFlushIntervalMS,
+		FilterLocalFallbackResponse: true,
+		APIMaintenance:              DefaultAPIMaintenanceConfig(),
 	}
 }
 
@@ -85,6 +89,7 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	if settings.StreamFlushIntervalMS > maxStreamFlushIntervalMS {
 		settings.StreamFlushIntervalMS = maxStreamFlushIntervalMS
 	}
+	settings.APIMaintenance = NormalizeAPIMaintenanceConfig(settings.APIMaintenance)
 	return settings
 }
 
@@ -95,6 +100,8 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.CodexMinCLIVersion = settings.CodexMinCLIVersion
 		next.StreamFlushPolicy = settings.StreamFlushPolicy
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
+		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
+		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)
 	}
 	next = NormalizeRuntimeSettings(next)
 	runtimeSettings.Store(next)

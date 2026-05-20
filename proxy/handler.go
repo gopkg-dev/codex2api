@@ -867,10 +867,12 @@ func appendMissingResponseImageOutputs(responseJSON []byte, imageOutputs []json.
 // RegisterRoutes 注册路由
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	auth := h.authMiddleware()
+	maintenance := MaintenanceMiddleware()
 
 	// /v1 前缀路由（标准路径）
 	v1 := r.Group("/v1")
 	v1.Use(auth)
+	v1.Use(maintenance)
 	v1.POST("/chat/completions", h.ChatCompletions)
 	v1.POST("/responses", h.Responses)
 	v1.POST("/responses/compact", h.ResponsesCompact)
@@ -880,16 +882,17 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	v1.GET("/models", h.ListModels)
 
 	// 无前缀路由（兼容 base_url 已包含 /v1 的客户端）
-	r.POST("/chat/completions", auth, h.ChatCompletions)
-	r.POST("/responses", auth, h.Responses)
-	r.POST("/responses/compact", auth, h.ResponsesCompact)
-	r.POST("/images/generations", auth, h.ImagesGenerations)
-	r.POST("/images/edits", auth, h.ImagesEdits)
-	r.POST("/messages", auth, h.Messages)
+	r.POST("/chat/completions", auth, maintenance, h.ChatCompletions)
+	r.POST("/responses", auth, maintenance, h.Responses)
+	r.POST("/responses/compact", auth, maintenance, h.ResponsesCompact)
+	r.POST("/images/generations", auth, maintenance, h.ImagesGenerations)
+	r.POST("/images/edits", auth, maintenance, h.ImagesEdits)
+	r.POST("/messages", auth, maintenance, h.Messages)
 	r.GET("/models", auth, h.ListModels)
 
 	codexDirect := r.Group("/backend-api/codex")
 	codexDirect.Use(auth)
+	codexDirect.Use(maintenance)
 	codexDirect.POST("/responses", h.Responses)
 	codexDirect.POST("/responses/*subpath", func(c *gin.Context) {
 		subpath := strings.TrimSpace(c.Param("subpath"))
@@ -1342,6 +1345,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			wroteAnyBody := false
 			var imageLogInfo imageUsageLogInfo
 			var terminalFailurePayload []byte
+			localFallbackDetected := false
 
 			if isStream {
 				c.Header("Content-Type", "text/event-stream")
@@ -1359,8 +1363,20 @@ func (h *Handler) Responses(c *gin.Context) {
 					return
 				}
 				streamWriter := newStreamFlushWriter(c.Writer, flusher)
+				filter := newLocalFallbackStreamFilter(CurrentRuntimeSettings().FilterLocalFallbackResponse)
 				clientGone := false
+				writeFiltered := func(payload string) error {
+					err := streamWriter.WriteString(payload)
+					if err == nil {
+						wroteAnyBody = true
+					}
+					return err
+				}
 				readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+					if filter.observe(data) {
+						localFallbackDetected = true
+						return false
+					}
 					parsed := gjson.ParseBytes(data)
 					eventType := parsed.Get("type").String()
 					if !ttftRecorded && isFirstTokenEvent(eventType) {
@@ -1385,15 +1401,19 @@ func (h *Handler) Responses(c *gin.Context) {
 						imageLogInfo = mergeImageUsageLogInfo(imageLogInfo, imageUsageLogInfoFromImage(image))
 					}
 					if !clientGone {
-						if err := streamWriter.WriteString(fmt.Sprintf("data: %s\n\n", data)); err != nil {
+						if err := filter.write(fmt.Sprintf("data: %s\n\n", data), writeFiltered); err != nil {
 							writeErr = err
 							clientGone = true
-						} else {
-							wroteAnyBody = true
+						} else if err := filter.flushIfReleased(writeFiltered); err != nil {
+							writeErr = err
+							clientGone = true
 						}
 					}
 					return eventType != "response.completed" && eventType != "response.failed"
 				})
+				if writeErr == nil && !localFallbackDetected {
+					writeErr = filter.flushAll(writeFiltered)
+				}
 				if writeErr == nil {
 					writeErr = streamWriter.Flush()
 				}
@@ -1401,6 +1421,9 @@ func (h *Handler) Responses(c *gin.Context) {
 				var respBody []byte
 				respBody, readErr = io.ReadAll(resp.Body)
 				if readErr == nil {
+					if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(respBody) {
+						localFallbackDetected = true
+					}
 					usage = extractUsageFromResult(gjson.GetBytes(respBody, "usage"))
 					actualServiceTier = gjson.GetBytes(respBody, "service_tier").String()
 					imageLogInfo = imageUsageLogInfoFromResponseJSON(respBody)
@@ -1409,7 +1432,11 @@ func (h *Handler) Responses(c *gin.Context) {
 					if contentType == "" {
 						contentType = "application/json"
 					}
-					c.Data(http.StatusOK, contentType, respBody)
+					if localFallbackDetected {
+						sendLocalFallbackError(c)
+					} else {
+						c.Data(http.StatusOK, contentType, respBody)
+					}
 				}
 			}
 
@@ -1417,6 +1444,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			outcome := classifyStreamOutcome(c.Request.Context().Err(), readErr, writeErr, gotTerminal)
 			if len(terminalFailurePayload) > 0 {
 				outcome = classifyResponseFailedOutcome(terminalFailurePayload)
+			}
+			if localFallbackDetected {
+				outcome = localFallbackStreamOutcome()
 			}
 			if shouldTransparentRetryStream(outcome, attempt, maxRetries, wroteAnyBody, c.Request.Context().Err(), writeErr) {
 				log.Printf("OpenAI Responses 上游流在首包前断开，重置连接并重试 (attempt %d/%d, account %d): %s", attempt+1, maxRetries+1, account.ID(), outcome.failureMessage)
@@ -1426,6 +1456,9 @@ func (h *Handler) Responses(c *gin.Context) {
 				h.store.Release(account)
 				h.store.UnbindSessionAffinity(affinityKey, account.ID())
 				continue
+			}
+			if isStream && localFallbackDetected && !wroteAnyBody {
+				sendLocalFallbackError(c)
 			}
 			if !isStream && readErr != nil {
 				c.JSON(http.StatusBadGateway, gin.H{
@@ -1609,6 +1642,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		var responseJSON []byte
 		var imageLogInfo imageUsageLogInfo
 		var terminalFailurePayload []byte
+		localFallbackDetected := false
 
 		if isStream {
 			// 流式透传 + TTFT 跟踪
@@ -1627,11 +1661,23 @@ func (h *Handler) Responses(c *gin.Context) {
 				return
 			}
 			streamWriter := newStreamFlushWriter(c.Writer, flusher)
+			filter := newLocalFallbackStreamFilter(CurrentRuntimeSettings().FilterLocalFallbackResponse)
 
 			// clientGone：客户端写失败后置位，后续事件不再写客户端，
 			// 但继续读上游直到 response.completed/failed，以拿到准确 usage。
 			clientGone := false
+			writeFiltered := func(payload string) error {
+				err := streamWriter.WriteString(payload)
+				if err == nil {
+					wroteAnyBody = true
+				}
+				return err
+			}
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if filter.observe(data) {
+					localFallbackDetected = true
+					return false
+				}
 				parsed := gjson.ParseBytes(data)
 				eventType := parsed.Get("type").String()
 
@@ -1665,15 +1711,19 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 
 				if !clientGone {
-					if err := streamWriter.WriteString(fmt.Sprintf("data: %s\n\n", data)); err != nil {
+					if err := filter.write(fmt.Sprintf("data: %s\n\n", data), writeFiltered); err != nil {
 						writeErr = err
 						clientGone = true
-					} else {
-						wroteAnyBody = true
+					} else if err := filter.flushIfReleased(writeFiltered); err != nil {
+						writeErr = err
+						clientGone = true
 					}
 				}
 				return eventType != "response.completed" && eventType != "response.failed"
 			})
+			if writeErr == nil && !localFallbackDetected {
+				writeErr = filter.flushAll(writeFiltered)
+			}
 			if writeErr == nil {
 				writeErr = streamWriter.Flush()
 			}
@@ -1685,6 +1735,10 @@ func (h *Handler) Responses(c *gin.Context) {
 			imageOutputs := make([]json.RawMessage, 0, 1)
 			seenImageOutputs := make(map[string]struct{})
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
+					localFallbackDetected = true
+					return false
+				}
 				parsed := gjson.ParseBytes(data)
 				eventType := parsed.Get("type").String()
 				if outputItem, ok := extractResponseOutputItemDone(data, seenOutputItems); ok {
@@ -1738,6 +1792,9 @@ func (h *Handler) Responses(c *gin.Context) {
 		if len(terminalFailurePayload) > 0 {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		}
+		if localFallbackDetected {
+			outcome = localFallbackStreamOutcome()
+		}
 		if shouldTransparentRetryStream(outcome, attempt, maxRetries, wroteAnyBody, c.Request.Context().Err(), writeErr) {
 			log.Printf("上游流在首包前断开，重置连接并重试 (attempt %d/%d, account %d, /v1/responses): %s", attempt+1, maxRetries+1, account.ID(), outcome.failureMessage)
 			recyclePooledClient(account, proxyURL)
@@ -1747,6 +1804,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			h.store.Release(account)
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			continue
+		}
+		if isStream && localFallbackDetected && !wroteAnyBody {
+			sendLocalFallbackError(c)
 		}
 
 		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
@@ -1766,7 +1826,9 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 		}
 		if !isStream {
-			if len(terminalFailurePayload) > 0 {
+			if localFallbackDetected {
+				sendLocalFallbackError(c)
+			} else if len(terminalFailurePayload) > 0 {
 				c.JSON(logStatusCode, gin.H{
 					"error": gin.H{"message": outcome.failureMessage, "type": "upstream_error"},
 				})
@@ -2025,6 +2087,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		localFallbackDetected := CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(respBody)
 
 		// 提取 usage 用于日志
 		promptTokens := int(gjson.GetBytes(respBody, "usage.input_tokens").Int())
@@ -2037,26 +2100,40 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 		resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
 
 		totalDuration := int(time.Since(start).Milliseconds())
+		statusCode := http.StatusOK
+		errorKind := ""
+		errorMessage := ""
+		if localFallbackDetected {
+			statusCode = http.StatusBadGateway
+			errorKind = localFallbackErrorCode
+			errorMessage = localFallbackErrorMessage
+		}
 		h.logUsageForRequest(c, &database.UsageLogInput{
-			AccountID:        account.ID(),
-			Endpoint:         "/v1/responses/compact",
-			Model:            model,
-			StatusCode:       http.StatusOK,
-			DurationMs:       totalDuration,
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			TotalTokens:      totalTokens,
-			InputTokens:      promptTokens,
-			OutputTokens:     completionTokens,
-			ReasoningTokens:  reasoningTokens,
-			CachedTokens:     cachedTokens,
-			ReasoningEffort:  reasoningEffort,
-			InboundEndpoint:  "/v1/responses/compact",
-			UpstreamEndpoint: "/v1/responses/compact",
-			ServiceTier:      resolvedServiceTier,
+			AccountID:         account.ID(),
+			Endpoint:          "/v1/responses/compact",
+			Model:             model,
+			StatusCode:        statusCode,
+			DurationMs:        totalDuration,
+			PromptTokens:      promptTokens,
+			CompletionTokens:  completionTokens,
+			TotalTokens:       totalTokens,
+			InputTokens:       promptTokens,
+			OutputTokens:      completionTokens,
+			ReasoningTokens:   reasoningTokens,
+			CachedTokens:      cachedTokens,
+			ReasoningEffort:   reasoningEffort,
+			InboundEndpoint:   "/v1/responses/compact",
+			UpstreamEndpoint:  "/v1/responses/compact",
+			ServiceTier:       resolvedServiceTier,
+			UpstreamErrorKind: errorKind,
+			ErrorMessage:      errorMessage,
 		})
 
 		h.store.Release(account)
+		if localFallbackDetected {
+			sendLocalFallbackError(c)
+			return
+		}
 		c.Data(http.StatusOK, "application/json", respBody)
 		return
 	}
@@ -2278,6 +2355,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		wroteAnyBody := false
 		var compactResult []byte
 		var terminalFailurePayload []byte
+		localFallbackDetected := false
 
 		chunkID := "chatcmpl-" + uuid.New().String()[:8]
 		created := time.Now().Unix()
@@ -2299,11 +2377,23 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				return
 			}
 			streamWriter := newStreamFlushWriter(c.Writer, flusher)
+			filter := newLocalFallbackStreamFilter(CurrentRuntimeSettings().FilterLocalFallbackResponse)
 
 			// clientGone：客户端写失败后置位，后续事件不再写客户端，
 			// 但继续读上游直到 response.completed/failed，以拿到准确 usage。
 			clientGone := false
+			writeFiltered := func(payload string) error {
+				err := streamWriter.WriteString(payload)
+				if err == nil {
+					wroteAnyBody = true
+				}
+				return err
+			}
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if filter.observe(data) {
+					localFallbackDetected = true
+					return false
+				}
 				chunk, done := streamTranslator.Translate(data)
 
 				parsed := gjson.ParseBytes(data)
@@ -2329,22 +2419,26 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				}
 
 				if !clientGone && chunk != nil {
-					if err := streamWriter.WriteString(fmt.Sprintf("data: %s\n\n", chunk)); err != nil {
+					if err := filter.write(fmt.Sprintf("data: %s\n\n", chunk), writeFiltered); err != nil {
 						writeErr = err
 						clientGone = true
-					} else {
-						wroteAnyBody = true
+					} else if err := filter.flushIfReleased(writeFiltered); err != nil {
+						writeErr = err
+						clientGone = true
 					}
 				}
 				if !clientGone && done {
-					if err := streamWriter.WriteString("data: [DONE]\n\n"); err != nil {
+					if err := filter.write("data: [DONE]\n\n", writeFiltered); err != nil {
 						writeErr = err
 						clientGone = true
-					} else if err := streamWriter.Flush(); err != nil {
-						writeErr = err
-						clientGone = true
-					} else {
-						wroteAnyBody = true
+					} else if !localFallbackDetected {
+						if err := filter.flushAll(writeFiltered); err != nil {
+							writeErr = err
+							clientGone = true
+						} else if err := streamWriter.Flush(); err != nil {
+							writeErr = err
+							clientGone = true
+						}
 					}
 					if !clientGone {
 						return false
@@ -2356,6 +2450,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				}
 				return true
 			})
+			if writeErr == nil && !localFallbackDetected {
+				writeErr = filter.flushAll(writeFiltered)
+			}
 			if writeErr == nil {
 				writeErr = streamWriter.Flush()
 			}
@@ -2364,6 +2461,10 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			var toolCalls []ToolCallResult
 
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
+					localFallbackDetected = true
+					return false
+				}
 				parsed := gjson.ParseBytes(data)
 				eventType := parsed.Get("type").String()
 				if !ttftRecorded && isFirstTokenEvent(eventType) {
@@ -2403,6 +2504,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		if len(terminalFailurePayload) > 0 {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		}
+		if localFallbackDetected {
+			outcome = localFallbackStreamOutcome()
+		}
 		if shouldTransparentRetryStream(outcome, attempt, maxRetries, wroteAnyBody, c.Request.Context().Err(), writeErr) {
 			log.Printf("上游流在首包前断开，重置连接并重试 (attempt %d/%d, account %d, /v1/chat/completions): %s", attempt+1, maxRetries+1, account.ID(), outcome.failureMessage)
 			recyclePooledClient(account, proxyURL)
@@ -2412,6 +2516,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			h.store.Release(account)
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			continue
+		}
+		if isStream && localFallbackDetected && !wroteAnyBody {
+			sendLocalFallbackError(c)
 		}
 
 		h.store.BindSessionAffinity(affinityKey, account, proxyURL)
@@ -2431,7 +2538,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			}
 		}
 		if !isStream {
-			if len(terminalFailurePayload) > 0 {
+			if localFallbackDetected {
+				sendLocalFallbackError(c)
+			} else if len(terminalFailurePayload) > 0 {
 				c.JSON(logStatusCode, gin.H{
 					"error": gin.H{"message": outcome.failureMessage, "type": "upstream_error"},
 				})

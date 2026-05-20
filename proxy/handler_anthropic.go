@@ -261,6 +261,7 @@ func (h *Handler) Messages(c *gin.Context) {
 		var writeErr error
 		wroteAnyBody := false
 		var terminalFailurePayload []byte
+		localFallbackDetected := false
 
 		if isStream {
 			// 流式响应：逐事件翻译为 Anthropic SSE
@@ -279,8 +280,20 @@ func (h *Handler) Messages(c *gin.Context) {
 
 			translator := newAnthropicStreamTranslator(originalModel)
 			streamWriter := newStreamFlushWriter(c.Writer, flusher)
+			filter := newLocalFallbackStreamFilter(CurrentRuntimeSettings().FilterLocalFallbackResponse)
+			writeFiltered := func(payload string) error {
+				err := streamWriter.WriteString(payload)
+				if err == nil {
+					wroteAnyBody = true
+				}
+				return err
+			}
 
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if filter.observe(data) {
+					localFallbackDetected = true
+					return false
+				}
 				parsed := gjson.ParseBytes(data)
 				eventType := parsed.Get("type").String()
 
@@ -309,21 +322,27 @@ func (h *Handler) Messages(c *gin.Context) {
 				events := translator.translateEvent(data)
 				for _, evt := range events {
 					sse := anthropicEventToSSE(evt)
-					if err := streamWriter.WriteString(sse); err != nil {
+					if err := filter.write(sse, writeFiltered); err != nil {
 						writeErr = err
 						return false
 					}
-					wroteAnyBody = true
+					if err := filter.flushIfReleased(writeFiltered); err != nil {
+						writeErr = err
+						return false
+					}
 				}
 
 				return eventType != "response.completed" && eventType != "response.failed"
 			})
+			if writeErr == nil && !localFallbackDetected {
+				writeErr = filter.flushAll(writeFiltered)
+			}
 			if writeErr == nil {
 				writeErr = streamWriter.Flush()
 			}
 
 			// 流结束后补齐事件
-			if writeErr == nil {
+			if writeErr == nil && !localFallbackDetected {
 				finalEvents := translator.finalize()
 				// 仅在 message_stop 未发送过时输出
 				if !gotTerminal {
@@ -344,6 +363,10 @@ func (h *Handler) Messages(c *gin.Context) {
 			var lastCompletedData []byte
 
 			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
+					localFallbackDetected = true
+					return false
+				}
 				parsed := gjson.ParseBytes(data)
 				eventType := parsed.Get("type").String()
 
@@ -368,7 +391,9 @@ func (h *Handler) Messages(c *gin.Context) {
 				return true
 			})
 
-			if lastCompletedData != nil {
+			if localFallbackDetected {
+				sendLocalFallbackError(c)
+			} else if lastCompletedData != nil {
 				anthropicResp := buildAnthropicResponseFromCompleted(lastCompletedData, originalModel)
 				c.JSON(http.StatusOK, anthropicResp)
 			} else {
@@ -382,6 +407,9 @@ func (h *Handler) Messages(c *gin.Context) {
 		if len(terminalFailurePayload) > 0 {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		}
+		if localFallbackDetected {
+			outcome = localFallbackStreamOutcome()
+		}
 		if shouldTransparentRetryStream(outcome, attempt, maxRetries, wroteAnyBody, c.Request.Context().Err(), writeErr) {
 			log.Printf("上游流在首包前断开，重试 (attempt %d/%d, account %d, /v1/messages): %s",
 				attempt+1, maxRetries+1, account.ID(), outcome.failureMessage)
@@ -394,6 +422,9 @@ func (h *Handler) Messages(c *gin.Context) {
 			h.store.Release(account)
 			h.store.UnbindSessionAffinity(affinityKey, account.ID())
 			continue
+		}
+		if isStream && localFallbackDetected && !wroteAnyBody {
+			sendLocalFallbackError(c)
 		}
 
 		h.store.BindSessionAffinity(affinityKey, account, proxyURL)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -1014,6 +1015,8 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 			out, usage, imageCount, imageLogInfo, readErr = collectImagesResponse(resp.Body, responseFormat, requestModel)
 			if readErr == nil {
 				c.Data(http.StatusOK, "application/json", out)
+			} else if errors.Is(readErr, errLocalFallbackResponse) {
+				sendLocalFallbackError(c)
 			} else {
 				// Check retryability BEFORE writing error response to avoid
 				// double-write when the error is transient.
@@ -1077,6 +1080,10 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 		}
 		if readErr != nil {
 			logInput.ErrorMessage = usageLogErrorMessage(statusCode, []byte(readErr.Error()))
+			if errors.Is(readErr, errLocalFallbackResponse) {
+				logInput.UpstreamErrorKind = localFallbackErrorCode
+				logInput.ErrorMessage = localFallbackErrorMessage
+			}
 		}
 		if usage != nil {
 			logInput.PromptTokens = usage.PromptTokens
@@ -1151,6 +1158,10 @@ func collectImagesResponse(body io.Reader, responseFormat, fallbackModel string)
 		readErr        error
 	)
 	err := ReadSSEStream(body, func(data []byte) bool {
+		if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
+			readErr = errLocalFallbackResponse
+			return false
+		}
 		if meta, eventCreatedAt, ok := extractImageMetaFromLifecycleEvent(data); ok {
 			mergeImageMeta(&firstMeta, meta)
 			if eventCreatedAt > 0 {
@@ -1260,6 +1271,11 @@ func (h *Handler) streamImagesResponse(c *gin.Context, body io.Reader, responseF
 
 	err := ReadSSEStream(body, func(data []byte) bool {
 		if readErr != nil {
+			return false
+		}
+		if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
+			readErr = errLocalFallbackResponse
+			writeEvent("error", buildImagesStreamErrorPayload(localFallbackErrorMessage))
 			return false
 		}
 		if firstTokenMs == 0 {

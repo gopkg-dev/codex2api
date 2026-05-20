@@ -38,3 +38,6 @@ AGMENT.md
 CLIProxyAPI/
 sub2api/
 new-api/
+data/codex2api.db
+data/codex2api.db-shm
+data/codex2api.db-wal
