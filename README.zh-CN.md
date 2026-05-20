@@ -23,9 +23,10 @@
 
 <table>
 <tr><td width="210"><b>统一兼容入口</b></td><td>同时覆盖 OpenAI 风格 Chat Completions / Responses / Images、Anthropic Messages、无前缀兼容路由和 Codex 原生 Responses 转发，客户端侧少改配置即可接入。</td></tr>
-<tr><td><b>账号池调度核心</b></td><td>围绕账号状态、健康层级、调度分、动态并发、冷却恢复和近期用量做选择，自动避开不可用账号，减少单账号打满和反复失败。</td></tr>
-<tr><td><b>可视化管理后台</b></td><td>内置 React / Vite 管理台，提供账号导入测试、API Key、代理池、生图、Prompt 检查、用量统计、运维概览、调度看板和系统设置。</td></tr>
-<tr><td><b>两种部署形态</b></td><td>生产环境用 PostgreSQL + Redis，单机测试用 SQLite + Memory；Docker 镜像、源码构建、本地开发和一键交互部署脚本都已准备好。</td></tr>
+<tr><td><b>账号池调度核心</b></td><td>围绕账号状态、健康层级、调度分、动态并发、冷却恢复和近期用量做选择，自动避开不可用账号，减少单账号打满和反复失败。支持 <code>round_robin</code> 和 <code>remaining_quota</code> 两种调度模式，以及单账号信用计费标记。</td></tr>
+<tr><td><b>可视化管理后台</b></td><td>内置 React / Vite 管理台，提供账号导入测试、API Key、代理池、生图（文生图 + 图生图）、Prompt 检查、用量统计、运维概览、调度看板和系统设置。</td></tr>
+<tr><td><b>两种部署形态</b></td><td>生产环境用 PostgreSQL + Redis，单机测试用 SQLite + Memory；Docker 镜像、源码构建、本地开发和一键交互部署脚本都已准备好。SQLite 模式默认绑定 <code>127.0.0.1</code> 以提升安全性。</td></tr>
+<tr><td><b>计费与可观测性</b></td><td>单账号 5h/7d 窗口化 USD 费用追踪、信用配额支持、API Key 用量追踪、OAuth PKCE 获取 Token、Prompt 过滤，以及含请求日志与趋势图表的用量仪表盘。</td></tr>
 </table>
 
 ---
@@ -403,6 +404,27 @@ curl -X POST http://localhost:8080/api/admin/accounts/import \
 
 > 所有导入接口自动去重，已存在的 Token 不会重复写入。更多管理接口（导出、迁移、OAuth 授权等）参见 [API 文档](docs/API.md)。
 
+#### OAuth PKCE 授权
+
+Codex2API 支持通过 OAuth PKCE 流程获取 Refresh Token，适用于无法手动提取 Token 的场景：
+
+```bash
+# 步骤 1：生成授权 URL
+curl -X POST http://localhost:8080/api/admin/oauth/generate-auth-url \
+  -H "X-Admin-Key: your-admin-secret" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+
+# 步骤 2：在浏览器中打开返回的 auth_url，完成授权
+# 步骤 3：用授权码兑换 Token（自动创建账号）
+curl -X POST http://localhost:8080/api/admin/oauth/exchange-code \
+  -H "X-Admin-Key: your-admin-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "...", "code": "...", "state": "..."}'
+```
+
+> 完整 OAuth 流程及所有管理接口参见 [API 文档](docs/API.md)。
+
 ---
 
 ## 管理后台
@@ -513,6 +535,8 @@ curl -X POST http://localhost:8080/api/admin/accounts/import \
 | --- | --- | --- |
 | `credit_enabled` | bool | 标记账号为信用计费模式 |
 | `credit_skip_usage_window` | bool | 开启后跳过 7 天/5 小时用量窗口惩罚 |
+
+**窗口化 USD 费用**：账号列表展示每个账号在两个时间窗口内的累计计费金额——过去 5 小时和过去 7 天，窗口对齐各账号的用量重置边界。这反映的是实际扣费金额而非估算的 Token 费用。
 
 ---
 
