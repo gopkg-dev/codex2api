@@ -177,6 +177,11 @@ func TestShouldTransparentRetryStream(t *testing.T) {
 	if shouldTransparentRetryStream(retryable, 0, 2, false, context.Canceled, nil) {
 		t.Fatal("expected retry to stop when downstream context is canceled")
 	}
+
+	localFallback := localFallbackStreamOutcome()
+	if shouldTransparentRetryStream(localFallback, 0, 2, false, nil, nil) {
+		t.Fatal("expected local fallback response to return 502 without transparent retry")
+	}
 }
 
 func TestApplyCodexRequestHeadersUsesSessionIDWithoutConversationID(t *testing.T) {

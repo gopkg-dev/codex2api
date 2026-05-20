@@ -677,6 +677,9 @@ func shouldTransparentRetryStream(outcome streamOutcome, attempt int, maxRetries
 	if attempt >= maxRetries {
 		return false
 	}
+	if outcome.failureKind == localFallbackErrorCode {
+		return false
+	}
 	if !outcome.penalize {
 		return false
 	}
@@ -1414,7 +1417,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				if writeErr == nil && !localFallbackDetected {
 					writeErr = filter.flushAll(writeFiltered)
 				}
-				if writeErr == nil {
+				if writeErr == nil && !localFallbackDetected {
 					writeErr = streamWriter.Flush()
 				}
 			} else {
@@ -1724,7 +1727,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			if writeErr == nil && !localFallbackDetected {
 				writeErr = filter.flushAll(writeFiltered)
 			}
-			if writeErr == nil {
+			if writeErr == nil && !localFallbackDetected {
 				writeErr = streamWriter.Flush()
 			}
 		} else {
@@ -2453,7 +2456,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			if writeErr == nil && !localFallbackDetected {
 				writeErr = filter.flushAll(writeFiltered)
 			}
-			if writeErr == nil {
+			if writeErr == nil && !localFallbackDetected {
 				writeErr = streamWriter.Flush()
 			}
 		} else {

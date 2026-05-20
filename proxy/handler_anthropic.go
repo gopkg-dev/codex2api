@@ -337,7 +337,7 @@ func (h *Handler) Messages(c *gin.Context) {
 			if writeErr == nil && !localFallbackDetected {
 				writeErr = filter.flushAll(writeFiltered)
 			}
-			if writeErr == nil {
+			if writeErr == nil && !localFallbackDetected {
 				writeErr = streamWriter.Flush()
 			}
 
