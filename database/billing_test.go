@@ -224,3 +224,102 @@ func TestProModelsHaveCorrectPricing(t *testing.T) {
 		t.Fatal("gpt-5.5-pro should have different pricing from gpt-5.5")
 	}
 }
+
+func TestLongContextPricingTriggersAbove272KTokens(t *testing.T) {
+	// Below threshold: standard pricing.
+	std := CalculateCostBreakdown(272000, 1000, 0, "gpt-5.4", "")
+	assertFloatEqual(t, std.InputPricePerMToken, 2.5)
+	assertFloatEqual(t, std.OutputPricePerMToken, 15.0)
+
+	// Above threshold: long context premium pricing.
+	long := CalculateCostBreakdown(272001, 1000, 0, "gpt-5.4", "")
+	assertFloatEqual(t, long.InputPricePerMToken, 5.0)
+	assertFloatEqual(t, long.OutputPricePerMToken, 22.5)
+
+	// Verify total cost is higher for long context.
+	if long.TotalCost <= std.TotalCost {
+		t.Fatalf("long context cost %.12f should be > standard cost %.12f", long.TotalCost, std.TotalCost)
+	}
+}
+
+func TestLongContextPricingWithPriorityTier(t *testing.T) {
+	long := CalculateCostBreakdown(300000, 1000, 200, "gpt-5.4", "priority")
+	assertFloatEqual(t, long.InputPricePerMToken, 10.0)
+	assertFloatEqual(t, long.OutputPricePerMToken, 45.0)
+	assertFloatEqual(t, long.CacheReadPricePerMToken, 1.0)
+	assertFloatEqual(t, long.ServiceTierCostMultiplier, 1.0)
+}
+
+func TestLongContextPricingDoesNotApplyWhenNoLongPricingDefined(t *testing.T) {
+	// gpt-4o has no long context pricing fields defined.
+	std := CalculateCostBreakdown(1000, 500, 0, "gpt-4o", "")
+	long := CalculateCostBreakdown(300000, 500, 0, "gpt-4o", "")
+	// Input price should be the same since no long variant exists.
+	assertFloatEqual(t, std.InputPricePerMToken, long.InputPricePerMToken)
+	assertFloatEqual(t, std.OutputPricePerMToken, long.OutputPricePerMToken)
+}
+
+func TestCodexAutoReviewModelNormalizesToGPT54(t *testing.T) {
+	pricing := GetModelPricing("codex-auto-review")
+	if pricing == nil {
+		t.Fatal("GetModelPricing(codex-auto-review) returned nil")
+	}
+	// Should normalize to gpt-5.4 pricing.
+	gpt54 := GetModelPricing("gpt-5.4")
+	assertFloatEqual(t, pricing.InputPricePerMToken, gpt54.InputPricePerMToken)
+	assertFloatEqual(t, pricing.OutputPricePerMToken, gpt54.OutputPricePerMToken)
+	assertFloatEqual(t, pricing.CacheReadPricePerMToken, gpt54.CacheReadPricePerMToken)
+	assertFloatEqual(t, pricing.InputPricePerMTokenPriority, gpt54.InputPricePerMTokenPriority)
+	assertFloatEqual(t, pricing.OutputPricePerMTokenPriority, gpt54.OutputPricePerMTokenPriority)
+	assertFloatEqual(t, pricing.CacheReadPricePerMTokenPriority, gpt54.CacheReadPricePerMTokenPriority)
+}
+
+func TestCodexAutoReviewLongContextPricing(t *testing.T) {
+	// codex-auto-review maps to gpt-5.4 which has long context pricing.
+	long := CalculateCostBreakdown(300000, 500, 100, "codex-auto-review", "")
+	assertFloatEqual(t, long.InputPricePerMToken, 5.0)    // long input price
+	assertFloatEqual(t, long.OutputPricePerMToken, 22.5)   // long output price
+	assertFloatEqual(t, long.CacheReadPricePerMToken, 0.5) // long cache read price
+}
+
+func TestCodexAutoReviewPriorityPricing(t *testing.T) {
+	bd := CalculateCostBreakdown(1000, 500, 0, "codex-auto-review", "priority")
+	assertFloatEqual(t, bd.InputPricePerMToken, 5.0)
+	assertFloatEqual(t, bd.OutputPricePerMToken, 30.0)
+	assertFloatEqual(t, bd.ServiceTierCostMultiplier, 1.0)
+}
+
+func TestNormalizeCodexBillingModelCodexAutoReview(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"codex-auto-review", "gpt-5.4"},
+		{"codex-auto-review-v2", "gpt-5.4"}, // variant suffix should match
+		{"CODEX-AUTO-REVIEW", "gpt-5.4"},    // case-insensitive
+		{"codex_auto_review", "gpt-5.4"},    // underscores normalized
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got, ok := normalizeCodexBillingModel(tt.model)
+			if !ok {
+				t.Fatalf("normalizeCodexBillingModel(%q) ok=false, want true", tt.model)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeCodexBillingModel(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGPT55LongContextPricing(t *testing.T) {
+	// gpt-5.5 has long pricing: $10/$45 standard, $25/$112.5 priority.
+	long := CalculateCostBreakdown(300000, 500, 0, "gpt-5.5", "")
+	assertFloatEqual(t, long.InputPricePerMToken, 10.0)
+	assertFloatEqual(t, long.OutputPricePerMToken, 45.0)
+
+	longPri := CalculateCostBreakdown(300000, 500, 0, "gpt-5.5", "priority")
+	assertFloatEqual(t, longPri.InputPricePerMToken, 25.0)
+	assertFloatEqual(t, longPri.OutputPricePerMToken, 112.5)
+	assertFloatEqual(t, longPri.ServiceTierCostMultiplier, 1.0)
+}
