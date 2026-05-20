@@ -4,11 +4,13 @@ import type {
   AddAccountRequest,
   AddATAccountRequest,
   AddOpenAIResponsesAccountRequest,
+  AddOpenAIResponsesAccountsRequest,
   AdminErrorResponse,
   APIKeysResponse,
   AccountsResponse,
   ChartAggregation,
   CreateAccountResponse,
+  CreateAccountsResponse,
   CreateAPIKeyResponse,
   CreateAPIKeyRequest,
   FetchOpenAIResponsesModelsRequest,
@@ -195,6 +197,8 @@ export const api = {
     request<CreateAccountResponse>('/accounts/at', { method: 'POST', body: JSON.stringify(data) }),
   addOpenAIResponsesAccount: (data: AddOpenAIResponsesAccountRequest) =>
     request<CreateAccountResponse>('/accounts/openai-responses', { method: 'POST', body: JSON.stringify(data) }),
+  addOpenAIResponsesAccounts: (data: AddOpenAIResponsesAccountsRequest) =>
+    request<CreateAccountsResponse>('/accounts/openai-responses/batch', { method: 'POST', body: JSON.stringify(data) }),
   fetchOpenAIResponsesModels: (data: FetchOpenAIResponsesModelsRequest) =>
     request<FetchOpenAIResponsesModelsResponse>('/accounts/openai-responses/models', { method: 'POST', body: JSON.stringify(data) }),
   updateOpenAIResponsesAccount: (id: number, data: UpdateOpenAIResponsesAccountRequest) =>

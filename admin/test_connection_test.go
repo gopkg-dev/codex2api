@@ -1,11 +1,16 @@
 package admin
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/codex2api/auth"
+	"github.com/codex2api/database"
 	"github.com/codex2api/proxy"
+	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
@@ -29,6 +34,45 @@ func TestBuildTestPayloadUsesSelectedModel(t *testing.T) {
 	if !gjson.GetBytes(payload, "stream").Bool() {
 		t.Fatal("stream should be true")
 	}
+}
+
+func TestConnectionStartEventIncludesEffectiveProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	store := auth.NewStore(nil, nil, &database.SystemSettings{})
+	store.AddAccount(&auth.Account{
+		DBID:         473,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		BaseURL:      "https://example.test",
+		APIKey:       "sk-test",
+		Models:       []string{"gpt-5.2"},
+		ProxyURL:     "http://127.0.0.1:1",
+	})
+	handler := &Handler{store: store}
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Params = gin.Params{{Key: "id", Value: "473"}}
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/accounts/473/test?model=gpt-5.2", nil)
+
+	handler.TestConnection(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	firstEvent := firstSSEDataPayload(recorder.Body.String())
+	if got := gjson.Get(firstEvent, "effective_proxy").String(); got != "http://127.0.0.1:1" {
+		t.Fatalf("effective_proxy = %q, want account proxy", got)
+	}
+}
+
+func firstSSEDataPayload(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "data: ") {
+			return strings.TrimPrefix(line, "data: ")
+		}
+	}
+	return ""
 }
 
 func TestFormatUsageLimitedTestErrorReportsSuccessfulProbeAsLimited(t *testing.T) {

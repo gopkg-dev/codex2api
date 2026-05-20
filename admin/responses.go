@@ -33,6 +33,12 @@ type createAccountResponse struct {
 	Message string `json:"message"`
 }
 
+type createAccountsResponse struct {
+	IDs     []int64 `json:"ids"`
+	Created int     `json:"created"`
+	Message string  `json:"message"`
+}
+
 type healthResponse struct {
 	Status    string `json:"status"`
 	Available int    `json:"available"`

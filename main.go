@@ -380,6 +380,7 @@ func loggerMiddleware() gin.HandlerFunc {
 		modelVal, _ := c.Get("x-model")
 		effortVal, _ := c.Get("x-reasoning-effort")
 		tierVal, _ := c.Get("x-service-tier")
+		clientIP := security.SanitizeLog(c.ClientIP())
 
 		emailStr := ""
 		if e, ok := email.(string); ok && e != "" {
@@ -408,9 +409,9 @@ func loggerMiddleware() gin.HandlerFunc {
 		}
 
 		if emailStr != "" {
-			log.Printf("%s %s %d %v%s [%s] [%s]", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), latency, tagStr, emailStr, proxyStr)
+			log.Printf("%s %s %d %v%s [%s] [%s] [ip=%s]", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), latency, tagStr, emailStr, proxyStr, clientIP)
 		} else {
-			log.Printf("%s %s %d %v%s", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), latency, tagStr)
+			log.Printf("%s %s %d %v%s [ip=%s]", c.Request.Method, c.Request.URL.Path, c.Writer.Status(), latency, tagStr, clientIP)
 		}
 	}
 }

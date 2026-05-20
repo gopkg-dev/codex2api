@@ -200,6 +200,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/accounts", h.ListAccounts)
 	api.POST("/accounts", h.AddAccount)
 	api.POST("/accounts/at", h.AddATAccount)
+	api.POST("/accounts/openai-responses/batch", h.AddOpenAIResponsesAccounts)
 	api.POST("/accounts/openai-responses", h.AddOpenAIResponsesAccount)
 	api.POST("/accounts/openai-responses/models", h.FetchOpenAIResponsesModels)
 	api.PATCH("/accounts/:id/openai-responses", h.UpdateOpenAIResponsesAccount)
@@ -517,8 +518,8 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			Status:                   row.Status,
 			ErrorMessage:             row.ErrorMessage,
 			ATOnly:                   !isOpenAIResponsesAccount && row.GetCredential("refresh_token") == "" && row.GetCredential("access_token") != "",
-		CreditEnabled:            row.CreditEnabled,
-		CreditSkipUsageWindow:    row.CreditSkipUsageWindow,
+			CreditEnabled:            row.CreditEnabled,
+			CreditSkipUsageWindow:    row.CreditSkipUsageWindow,
 			AccountType:              row.Type,
 			OpenAIResponsesAPI:       isOpenAIResponsesAccount,
 			BaseURL:                  baseURL,
@@ -1357,6 +1358,13 @@ type addOpenAIResponsesAccountReq struct {
 	ProxyURL string   `json:"proxy_url"`
 }
 
+type addOpenAIResponsesAccountsReq struct {
+	BaseURL  string   `json:"base_url"`
+	APIKeys  []string `json:"api_keys"`
+	Models   []string `json:"models"`
+	ProxyURL string   `json:"proxy_url"`
+}
+
 type fetchOpenAIResponsesModelsReq struct {
 	AccountID int64  `json:"account_id"`
 	BaseURL   string `json:"base_url"`
@@ -1456,6 +1464,110 @@ func (h *Handler) AddOpenAIResponsesAccount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "成功添加 OpenAI Responses API 账号",
 		"id":      id,
+	})
+}
+
+func (h *Handler) AddOpenAIResponsesAccounts(c *gin.Context) {
+	var req addOpenAIResponsesAccountsReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+
+	req.ProxyURL = security.SanitizeInput(req.ProxyURL)
+	baseURL, err := auth.NormalizeOpenAIResponsesBaseURL(req.BaseURL)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	models := auth.NormalizeOpenAIResponsesModels(req.Models)
+	if len(models) == 0 {
+		writeError(c, http.StatusBadRequest, "至少需要添加一个模型")
+		return
+	}
+	if err := security.ValidateProxyURL(req.ProxyURL); err != nil {
+		writeError(c, http.StatusBadRequest, "代理URL无效")
+		return
+	}
+	for _, model := range models {
+		if err := security.ValidateModelName(model); err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("模型名称无效: %s", model))
+			return
+		}
+	}
+
+	apiKeys := make([]string, 0, len(req.APIKeys))
+	seenRequestKeys := make(map[string]bool, len(req.APIKeys))
+	for _, raw := range req.APIKeys {
+		apiKey := strings.TrimSpace(raw)
+		if apiKey == "" {
+			continue
+		}
+		if seenRequestKeys[apiKey] {
+			writeError(c, http.StatusBadRequest, "请求中包含重复的 API Key")
+			return
+		}
+		seenRequestKeys[apiKey] = true
+		apiKeys = append(apiKeys, apiKey)
+	}
+	if len(apiKeys) == 0 {
+		writeError(c, http.StatusBadRequest, "API Key 是必填字段")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+
+	existing, err := h.db.GetAllOpenAIAPIKeys(ctx)
+	if err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	for _, apiKey := range apiKeys {
+		if existing[apiKey] {
+			writeError(c, http.StatusConflict, "存在已添加的 API Key")
+			return
+		}
+	}
+
+	ids := make([]int64, 0, len(apiKeys))
+	for i, apiKey := range apiKeys {
+		name := fmt.Sprintf("key-%d", i+1)
+		credentials := map[string]interface{}{
+			"upstream_type": auth.UpstreamOpenAIResponses,
+			"base_url":      baseURL,
+			"api_key":       apiKey,
+			"models":        models,
+			"plan_type":     "api",
+			"email":         baseURL,
+		}
+		id, err := h.db.InsertOpenAIResponsesAccount(ctx, name, credentials, req.ProxyURL)
+		if err != nil {
+			writeInternalError(c, err)
+			return
+		}
+		ids = append(ids, id)
+		h.db.InsertAccountEventAsync(id, "added", "manual_openai_responses_batch")
+		if h.store != nil {
+			h.store.AddAccount(&auth.Account{
+				DBID:         id,
+				ProxyURL:     req.ProxyURL,
+				HealthTier:   auth.HealthTierHealthy,
+				UpstreamType: auth.UpstreamOpenAIResponses,
+				BaseURL:      baseURL,
+				APIKey:       apiKey,
+				Models:       models,
+				Email:        baseURL,
+				PlanType:     "api",
+			})
+		}
+	}
+
+	security.SecurityAuditLog("OPENAI_RESPONSES_ACCOUNTS_ADDED", fmt.Sprintf("accounts=%d models=%d ip=%s", len(ids), len(models), c.ClientIP()))
+	c.JSON(http.StatusOK, createAccountsResponse{
+		IDs:     ids,
+		Created: len(ids),
+		Message: "成功批量添加 OpenAI Responses API 账号",
 	})
 }
 
@@ -3795,7 +3907,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
-			SchedulerMode:                    h.store.GetSchedulerMode(),
+		SchedulerMode:                    h.store.GetSchedulerMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",
@@ -4338,7 +4450,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
-			SchedulerMode:                    h.store.GetSchedulerMode(),
+		SchedulerMode:                    h.store.GetSchedulerMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && hasAdminSecret,
@@ -4410,7 +4522,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		AutoCleanExpired:                 h.store.GetAutoCleanExpired(),
 		ProxyPoolEnabled:                 h.store.GetProxyPoolEnabled(),
 		FastSchedulerEnabled:             h.store.FastSchedulerEnabled(),
-			SchedulerMode:                    h.store.GetSchedulerMode(),
+		SchedulerMode:                    h.store.GetSchedulerMode(),
 		MaxRetries:                       h.store.GetMaxRetries(),
 		MaxRateLimitRetries:              h.store.GetMaxRateLimitRetries(),
 		AllowRemoteMigration:             h.store.GetAllowRemoteMigration() && adminAuthSource != "disabled",

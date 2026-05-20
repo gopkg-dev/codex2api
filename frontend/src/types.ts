@@ -121,6 +121,19 @@ export interface AddOpenAIResponsesAccountRequest {
   proxy_url: string
 }
 
+export interface AddOpenAIResponsesAccountsRequest {
+  base_url: string
+  api_keys: string[]
+  models: string[]
+  proxy_url: string
+}
+
+export interface CreateAccountsResponse {
+  ids: number[]
+  created: number
+  message: string
+}
+
 export interface UpdateOpenAIResponsesAccountRequest {
   name?: string
   base_url: string

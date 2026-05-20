@@ -194,6 +194,19 @@ function parseModelTokens(value: string): string[] {
     });
 }
 
+function parseOpenAIAPIKeys(value: string): string[] {
+  const seen = new Set<string>();
+  return value
+    .split(/[\n,\t ]+/)
+    .map((item) => item.trim())
+    .filter((item) => {
+      if (!item) return false;
+      if (seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
 function mergeModelLists(current: string[], incoming: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -574,6 +587,10 @@ export default function Accounts() {
     warmAccounts,
     riskyAccounts,
   } = accountSummary;
+  const openAIAPIKeys = useMemo(
+    () => parseOpenAIAPIKeys(openAIForm.api_key),
+    [openAIForm.api_key],
+  );
 
   const allTags = useMemo(() => {
     const tags = new Set<string>();
@@ -817,12 +834,13 @@ export default function Accounts() {
   }, []);
 
   const handleFetchOpenAIModels = async () => {
-    if (!openAIForm.api_key.trim()) return;
+    const apiKeys = parseOpenAIAPIKeys(openAIForm.api_key);
+    if (apiKeys.length === 0) return;
     setOpenAIModelsLoading(true);
     try {
       const result = await api.fetchOpenAIResponsesModels({
         base_url: openAIForm.base_url,
-        api_key: openAIForm.api_key,
+        api_key: apiKeys[0],
         proxy_url: openAIForm.proxy_url,
       });
       const models = result.models ?? [];
@@ -848,11 +866,28 @@ export default function Accounts() {
 
   const handleAddOpenAIResponses = async () => {
     const models = openAIForm.models;
-    if (!openAIForm.api_key.trim() || models.length === 0) return;
+    const apiKeys = parseOpenAIAPIKeys(openAIForm.api_key);
+    if (apiKeys.length === 0 || models.length === 0) return;
     setSubmitting(true);
     try {
-      await api.addOpenAIResponsesAccount({ ...openAIForm, models });
-      showToast(t("accounts.addSuccess"));
+      if (apiKeys.length === 1) {
+        await api.addOpenAIResponsesAccount({
+          ...openAIForm,
+          api_key: apiKeys[0],
+          models,
+        });
+        showToast(t("accounts.addSuccess"));
+      } else {
+        const result = await api.addOpenAIResponsesAccounts({
+          base_url: openAIForm.base_url,
+          api_keys: apiKeys,
+          models,
+          proxy_url: openAIForm.proxy_url,
+        });
+        showToast(
+          t("accounts.openaiBatchAddSuccess", { count: result.created }),
+        );
+      }
       setShowAdd(false);
       setOpenAIForm({
         base_url: "https://api.openai.com",
@@ -3080,7 +3115,7 @@ export default function Accounts() {
                     onClick={() => void handleAddOpenAIResponses()}
                     disabled={
                       submitting ||
-                      !openAIForm.api_key.trim() ||
+                      openAIAPIKeys.length === 0 ||
                       openAIForm.models.length === 0
                     }
                   >
@@ -3256,6 +3291,9 @@ export default function Accounts() {
                       }))
                     }
                   />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {t("accounts.openaiNameBatchHint")}
+                  </p>
                 </div>
                 <div>
                   <label className="block mb-2 text-sm font-semibold text-muted-foreground">
@@ -3276,17 +3314,23 @@ export default function Accounts() {
                   <label className="block mb-2 text-sm font-semibold text-muted-foreground">
                     {t("accounts.openaiApiKey")} *
                   </label>
-                  <Input
-                    type="password"
-                    placeholder="sk-proj-..."
+                  <textarea
+                    className="w-full min-h-[120px] p-3 border border-input rounded-xl bg-background font-mono text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+                    placeholder={t("accounts.openaiApiKeysPlaceholder")}
                     value={openAIForm.api_key}
-                    onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                    onChange={(event: ChangeEvent<HTMLTextAreaElement>) =>
                       setOpenAIForm((form) => ({
                         ...form,
                         api_key: event.target.value,
                       }))
                     }
+                    rows={5}
                   />
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    {t("accounts.openaiApiKeysHint", {
+                      count: openAIAPIKeys.length,
+                    })}
+                  </p>
                 </div>
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-2">
@@ -3298,9 +3342,7 @@ export default function Accounts() {
                       variant="outline"
                       size="sm"
                       onClick={() => void handleFetchOpenAIModels()}
-                      disabled={
-                        openAIModelsLoading || !openAIForm.api_key.trim()
-                      }
+                      disabled={openAIModelsLoading || openAIAPIKeys.length === 0}
                     >
                       <RefreshCw
                         className={`size-3.5 ${openAIModelsLoading ? "animate-spin" : ""}`}
@@ -5481,6 +5523,7 @@ interface TestEvent {
   type: "test_start" | "content" | "test_complete" | "error";
   text?: string;
   model?: string;
+  effective_proxy?: string;
   success?: boolean;
   error?: string;
 }
@@ -5578,6 +5621,7 @@ function TestConnectionModal({
   >("connecting");
   const [errorMsg, setErrorMsg] = useState("");
   const [model, setModel] = useState("");
+  const [effectiveProxy, setEffectiveProxy] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
   const [modelOptions, setModelOptions] = useState<string[]>([]);
   const [modelOptionsReady, setModelOptionsReady] = useState(false);
@@ -5680,6 +5724,7 @@ function TestConnectionModal({
     setStatus("connecting");
     setErrorMsg("");
     setModel(selectedModel);
+    setEffectiveProxy("");
     settledRef.current = false;
 
     const controller = new AbortController();
@@ -5736,6 +5781,7 @@ function TestConnectionModal({
               switch (event.type) {
                 case "test_start":
                   setModel(event.model || selectedModel);
+                  setEffectiveProxy(event.effective_proxy || "");
                   setStatus("streaming");
                   break;
                 case "content":
@@ -5862,6 +5908,14 @@ function TestConnectionModal({
             placeholder={model || t("settings.testModel")}
             disabled={!modelOptionsReady || modelSelectOptions.length === 0}
           />
+        </div>
+        <div className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+          <span className="font-semibold text-foreground">
+            {t("accounts.effectiveProxy")}:
+          </span>{" "}
+          <span className="font-mono break-all">
+            {effectiveProxy || t("accounts.effectiveProxyDirect")}
+          </span>
         </div>
 
         {(output.length > 0 ||

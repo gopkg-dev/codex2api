@@ -22,11 +22,12 @@ import (
 
 // testEvent SSE 测试事件
 type testEvent struct {
-	Type    string `json:"type"`              // test_start | content | test_complete | error
-	Text    string `json:"text,omitempty"`    // 内容文本
-	Model   string `json:"model,omitempty"`   // 测试模型
-	Success bool   `json:"success,omitempty"` // 是否成功
-	Error   string `json:"error,omitempty"`   // 错误信息
+	Type           string `json:"type"`                      // test_start | content | test_complete | error
+	Text           string `json:"text,omitempty"`            // 内容文本
+	Model          string `json:"model,omitempty"`           // 测试模型
+	EffectiveProxy string `json:"effective_proxy,omitempty"` // 本次请求实际使用的代理
+	Success        bool   `json:"success,omitempty"`         // 是否成功
+	Error          string `json:"error,omitempty"`           // 错误信息
 }
 
 // TestConnection 测试账号连接（SSE 流式返回）
@@ -66,7 +67,8 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	c.Writer.Flush()
 
 	// 发送 test_start
-	sendTestEvent(c, testEvent{Type: "test_start", Model: testModel})
+	effectiveProxy := h.store.ResolveProxyForAccount(account)
+	sendTestEvent(c, testEvent{Type: "test_start", Model: testModel, EffectiveProxy: effectiveProxy})
 
 	// 构建最小测试请求体（参考 sub2api createOpenAITestPayload）
 	payload := buildTestPayload(testModel)
@@ -76,9 +78,9 @@ func (h *Handler) TestConnection(c *gin.Context) {
 	var resp *http.Response
 	var reqErr error
 	if isOpenAIResponsesAccount {
-		resp, reqErr = proxy.ExecuteOpenAIResponsesRequest(c.Request.Context(), account, payload, h.store.ResolveProxyForAccount(account), nil)
+		resp, reqErr = proxy.ExecuteOpenAIResponsesRequest(c.Request.Context(), account, payload, effectiveProxy, nil)
 	} else {
-		resp, reqErr = proxy.ExecuteRequest(c.Request.Context(), account, payload, "", h.store.ResolveProxyForAccount(account), "", nil, nil)
+		resp, reqErr = proxy.ExecuteRequest(c.Request.Context(), account, payload, "", effectiveProxy, "", nil, nil)
 	}
 	if reqErr != nil {
 		sendTestEvent(c, testEvent{Type: "error", Error: fmt.Sprintf("请求失败: %s", reqErr.Error())})
