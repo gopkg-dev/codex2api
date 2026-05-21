@@ -30,6 +30,19 @@ var maintenanceRandomSymbols = []rune{
 	'⚠', 'ℹ', '✦', '◆', '⏳', '🙂',
 }
 
+var maintenanceDigitEmoji = map[rune]string{
+	'0': "0️⃣",
+	'1': "1️⃣",
+	'2': "2️⃣",
+	'3': "3️⃣",
+	'4': "4️⃣",
+	'5': "5️⃣",
+	'6': "6️⃣",
+	'7': "7️⃣",
+	'8': "8️⃣",
+	'9': "9️⃣",
+}
+
 var maintenanceSimplifiedToTraditional = map[rune]rune{
 	'系': '係',
 	'统': '統',
@@ -596,8 +609,12 @@ func maintenanceStreamSegmentsWithRand(message string, randomize bool, rng *mran
 	segments := make([]string, 0, len(runes))
 	var current strings.Builder
 	for _, r := range runes {
-		r = maintenanceMaybeTraditionalRune(r, rng)
-		current.WriteRune(r)
+		if digit, ok := maintenanceMaybeEmojiDigit(r, rng); ok {
+			current.WriteString(digit)
+		} else {
+			r = maintenanceMaybeTraditionalRune(r, rng)
+			current.WriteRune(r)
+		}
 		if rng.Intn(3) == 0 {
 			current.WriteRune(' ')
 		}
@@ -619,6 +636,22 @@ func maintenanceStreamSegmentsWithRand(message string, randomize bool, rng *mran
 		return []string{message}
 	}
 	return segments
+}
+
+func maintenanceMaybeEmojiDigit(r rune, rng *mrand.Rand) (string, bool) {
+	emoji, ok := maintenanceDigitEmoji[r]
+	if !ok || rng.Intn(2) == 0 {
+		return "", false
+	}
+	return emoji, true
+}
+
+func maintenanceEmojiDigits() []string {
+	digits := make([]string, 0, len(maintenanceDigitEmoji))
+	for _, emoji := range maintenanceDigitEmoji {
+		digits = append(digits, emoji)
+	}
+	return digits
 }
 
 func maintenanceMaybeTraditionalRune(r rune, rng *mrand.Rand) rune {

@@ -213,8 +213,28 @@ func TestMaintenanceRandomizedSegmentsAddTextPerturbations(t *testing.T) {
 	if !containsAnyRune(got, append(maintenanceRandomPunctuation, maintenanceRandomSymbols...)) {
 		t.Fatalf("randomized text = %q, want punctuation or decorative symbol", got)
 	}
-	if normalized := normalizeMaintenanceRandomizedText(got); !strings.Contains(normalized, message) {
-		t.Fatalf("normalized randomized text = %q, want to contain %q; raw=%q", normalized, message, got)
+	normalizedMessage := strings.ReplaceAll(message, " ", "")
+	if normalized := normalizeMaintenanceRandomizedText(got); !strings.Contains(normalized, normalizedMessage) {
+		t.Fatalf("normalized randomized text = %q, want to contain %q; raw=%q", normalized, normalizedMessage, got)
+	}
+}
+
+func TestMaintenanceRandomizedSegmentsCanUseEmojiDigits(t *testing.T) {
+	message := "系统维护预计 1234567890 分钟后恢复"
+	var got string
+	for seed := int64(1); seed <= 50; seed++ {
+		segments := maintenanceStreamSegmentsWithRand(message, true, mrand.New(mrand.NewSource(seed)))
+		got = strings.Join(segments, "")
+		if containsAnyString(got, maintenanceEmojiDigits()) {
+			break
+		}
+	}
+	if !containsAnyString(got, maintenanceEmojiDigits()) {
+		t.Fatalf("randomized text = %q, want at least one emoji digit", got)
+	}
+	normalizedMessage := strings.ReplaceAll(message, " ", "")
+	if normalized := normalizeMaintenanceRandomizedText(got); !strings.Contains(normalized, normalizedMessage) {
+		t.Fatalf("normalized randomized text = %q, want to contain %q; raw=%q", normalized, normalizedMessage, got)
 	}
 }
 
@@ -317,7 +337,7 @@ func maintenanceTraditionalRunes() []rune {
 func normalizeMaintenanceRandomizedText(s string) string {
 	var out strings.Builder
 	for _, r := range s {
-		if r == ' ' || containsRune(maintenanceRandomPunctuation, r) || containsRune(maintenanceRandomSymbols, r) {
+		if r == ' ' || r == '\ufe0f' || r == '\u20e3' || containsRune(maintenanceRandomPunctuation, r) || containsRune(maintenanceRandomSymbols, r) {
 			continue
 		}
 		if simplified, ok := maintenanceTraditionalToSimplified[r]; ok {
@@ -331,6 +351,15 @@ func normalizeMaintenanceRandomizedText(s string) string {
 func containsRune(runes []rune, target rune) bool {
 	for _, r := range runes {
 		if r == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyString(s string, values []string) bool {
+	for _, value := range values {
+		if strings.Contains(s, value) {
 			return true
 		}
 	}
