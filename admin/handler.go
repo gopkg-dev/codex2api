@@ -188,6 +188,8 @@ func (h *Handler) SetPoolSizes(pgMaxConns, redisPoolSize int) {
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/p/img/:id", h.GetSignedImageAssetFile)
 	r.GET("/api/branding", h.GetBranding)
+	r.GET("/api/public/home", h.GetPublicHome)
+	r.GET("/api/public/chart-data", h.GetPublicChartData)
 
 	// 首次初始化端点（无需鉴权，仅在系统未配置 ADMIN_SECRET 时可用）
 	// 这两个端点必须注册在 adminAuthMiddleware 之外，否则会被 fail-closed 拦截。
@@ -3318,6 +3320,7 @@ type createKeyReq struct {
 	ExpiresAt       string          `json:"expires_at"`
 	ExpiresInDays   *int            `json:"expires_in_days"`
 	AllowedGroupIDs json.RawMessage `json:"allowed_group_ids"`
+	Disabled        bool            `json:"disabled"`
 }
 
 // generateKey 生成随机 API Key
@@ -3415,6 +3418,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		QuotaLimit:      quotaLimit,
 		ExpiresAt:       expiresAt,
 		AllowedGroupIDs: allowedGroupIDs.Values,
+		Disabled:        req.Disabled,
 	})
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "创建失败: "+err.Error())
@@ -3444,6 +3448,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		QuotaUsed:       0,
 		ExpiresAt:       expiresAtResponse,
 		AllowedGroupIDs: dedupeInt64(allowedGroupIDs.Values),
+		Disabled:        req.Disabled,
 	})
 }
 
@@ -3454,6 +3459,7 @@ type updateAPIKeyReq struct {
 	ExpiresAt       json.RawMessage `json:"expires_at"`
 	ExpiresInDays   *int            `json:"expires_in_days"`
 	AllowedGroupIDs json.RawMessage `json:"allowed_group_ids"`
+	Disabled        *bool           `json:"disabled"`
 }
 
 func (h *Handler) UpdateAPIKey(c *gin.Context) {
@@ -3541,6 +3547,10 @@ func (h *Handler) UpdateAPIKey(c *gin.Context) {
 		ExpiresAtSet:       expiresAtSet,
 		AllowedGroupIDs:    allowedGroupValues,
 		AllowedGroupIDsSet: allowedGroupIDs.Set,
+	}
+	if req.Disabled != nil {
+		update.Disabled = *req.Disabled
+		update.DisabledSet = true
 	}
 	if req.Name != nil {
 		update.Name = *req.Name
@@ -3668,8 +3678,9 @@ type settingsResponse struct {
 	SiteLogo                         string `json:"site_logo"`
 	MaxConcurrency                   int    `json:"max_concurrency"`
 	GlobalRPM                        int    `json:"global_rpm"`
-	IPConcurrencyLimit               int    `json:"ip_concurrency_limit"`
+	IPQPSLimit                       int    `json:"ip_qps_limit"`
 	IPRPMLimit                       int    `json:"ip_rpm_limit"`
+	IPBlacklist                      string `json:"ip_blacklist"`
 	TestModel                        string `json:"test_model"`
 	TestConcurrency                  int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes int    `json:"background_refresh_interval_minutes"`
@@ -3716,6 +3727,7 @@ type settingsResponse struct {
 	StreamFlushPolicy                string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            int    `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      bool   `json:"filter_local_fallback_response"`
+	APIKeyDisabledMessage            string `json:"api_key_disabled_message"`
 	APIMaintenanceEnabled            bool   `json:"api_maintenance_enabled"`
 	APIMaintenanceMessage            string `json:"api_maintenance_message"`
 	APIMaintenanceSSERandomize       bool   `json:"api_maintenance_sse_randomize"`
@@ -3736,8 +3748,10 @@ type updateSettingsReq struct {
 	SiteLogo                         *string `json:"site_logo"`
 	MaxConcurrency                   *int    `json:"max_concurrency"`
 	GlobalRPM                        *int    `json:"global_rpm"`
-	IPConcurrencyLimit               *int    `json:"ip_concurrency_limit"`
+	IPQPSLimit                       *int    `json:"ip_qps_limit"`
+	LegacyIPQPSLimit                 *int    `json:"ip_concurrency_limit"`
 	IPRPMLimit                       *int    `json:"ip_rpm_limit"`
+	IPBlacklist                      *string `json:"ip_blacklist"`
 	TestModel                        *string `json:"test_model"`
 	TestConcurrency                  *int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes *int    `json:"background_refresh_interval_minutes"`
@@ -3778,6 +3792,7 @@ type updateSettingsReq struct {
 	StreamFlushPolicy                *string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            *int    `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      *bool   `json:"filter_local_fallback_response"`
+	APIKeyDisabledMessage            *string `json:"api_key_disabled_message"`
 	APIMaintenanceEnabled            *bool   `json:"api_maintenance_enabled"`
 	APIMaintenanceMessage            *string `json:"api_maintenance_message"`
 	APIMaintenanceSSERandomize       *bool   `json:"api_maintenance_sse_randomize"`
@@ -3888,8 +3903,9 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		SiteLogo:                         branding.SiteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
-		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
+		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -3935,6 +3951,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
@@ -4016,16 +4033,20 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		log.Printf("设置已更新: global_rpm = %d", v)
 	}
 
-	if req.IPConcurrencyLimit != nil {
-		v := *req.IPConcurrencyLimit
+	if req.IPQPSLimit != nil || req.LegacyIPQPSLimit != nil {
+		value := req.IPQPSLimit
+		if value == nil {
+			value = req.LegacyIPQPSLimit
+		}
+		v := *value
 		if v < 0 {
 			v = 0
 		}
 		if v > 10000 {
 			v = 10000
 		}
-		h.rateLimiter.UpdateIPConcurrencyLimit(v)
-		log.Printf("设置已更新: ip_concurrency_limit = %d", v)
+		h.rateLimiter.UpdateIPQPSLimit(v)
+		log.Printf("设置已更新: ip_qps_limit = %d", v)
 	}
 
 	if req.IPRPMLimit != nil {
@@ -4035,6 +4056,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		}
 		h.rateLimiter.UpdateIPRPMLimit(v)
 		log.Printf("设置已更新: ip_rpm_limit = %d", v)
+	}
+	if req.IPBlacklist != nil {
+		h.rateLimiter.UpdateIPBlacklist(*req.IPBlacklist)
+		log.Printf("设置已更新: ip_blacklist")
 	}
 
 	if req.TestModel != nil && *req.TestModel != "" {
@@ -4231,6 +4256,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	if req.FilterLocalFallbackResponse != nil {
 		runtimeCfg.FilterLocalFallbackResponse = *req.FilterLocalFallbackResponse
 		log.Printf("设置已更新: filter_local_fallback_response = %t", runtimeCfg.FilterLocalFallbackResponse)
+	}
+	if req.APIKeyDisabledMessage != nil {
+		runtimeCfg.APIKeyDisabledMessage = *req.APIKeyDisabledMessage
+		log.Printf("设置已更新: api_key_disabled_message")
 	}
 	maintenanceCfg := runtimeCfg.APIMaintenance
 	if req.APIMaintenanceEnabled != nil {
@@ -4432,8 +4461,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                         siteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
-		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
+		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -4475,6 +4505,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		ImageStorageConfig:               imgConfigJSON,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
 	})
 	if err != nil {
@@ -4503,8 +4534,9 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		SiteLogo:                         siteLogo,
 		MaxConcurrency:                   h.store.GetMaxConcurrency(),
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
-		IPConcurrencyLimit:               h.rateLimiter.GetIPConcurrencyLimit(),
+		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
+		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -4551,6 +4583,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,

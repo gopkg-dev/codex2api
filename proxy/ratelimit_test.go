@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -568,18 +569,23 @@ func TestRateLimiter_Middleware(t *testing.T) {
 	// 如果到这里没有panic，测试通过
 }
 
-func TestRateLimiterLimitsConcurrentRequestsByIP(t *testing.T) {
+func TestRateLimiterIPQPSAllowsSecondRequestAfterOneSecondWhileFirstRuns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rl := NewRateLimiter(0)
-	rl.UpdateIPConcurrencyLimit(1)
+	rl.UpdateIPQPSLimit(1)
 
 	router := gin.New()
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
+	var requests int32
 	router.Use(rl.Middleware())
 	router.GET("/v1/responses", func(c *gin.Context) {
-		close(started)
-		<-release
+		count := atomic.AddInt32(&requests, 1)
+		startedOnce.Do(func() { close(started) })
+		if count == 1 {
+			<-release
+		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
@@ -598,13 +604,15 @@ func TestRateLimiterLimitsConcurrentRequestsByIP(t *testing.T) {
 		t.Fatal("first request did not enter handler")
 	}
 
+	time.Sleep(1100 * time.Millisecond)
+
 	secondRecorder := httptest.NewRecorder()
 	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
 	secondReq.RemoteAddr = "203.0.113.10:5678"
 	router.ServeHTTP(secondRecorder, secondReq)
 
-	if secondRecorder.Code != http.StatusTooManyRequests {
-		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusOK, secondRecorder.Body.String())
 	}
 
 	close(release)
@@ -618,10 +626,41 @@ func TestRateLimiterLimitsConcurrentRequestsByIP(t *testing.T) {
 	}
 }
 
-func TestRateLimiterIPConcurrencyOnlyAppliesToV1(t *testing.T) {
+func TestRateLimiterLimitsQPSByIPForV1(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rl := NewRateLimiter(0)
-	rl.UpdateIPConcurrencyLimit(1)
+	rl.UpdateIPQPSLimit(1)
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.GET("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	firstRecorder := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	firstReq.RemoteAddr = "203.0.113.12:1234"
+	router.ServeHTTP(firstRecorder, firstReq)
+	if firstRecorder.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want %d; body=%s", firstRecorder.Code, http.StatusOK, firstRecorder.Body.String())
+	}
+
+	secondRecorder := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	secondReq.RemoteAddr = "203.0.113.12:5678"
+	router.ServeHTTP(secondRecorder, secondReq)
+	if secondRecorder.Code != http.StatusTooManyRequests {
+		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	}
+	if body := secondRecorder.Body.String(); !strings.Contains(body, "ip_qps_limit_exceeded") {
+		t.Fatalf("second body = %s, want ip_qps_limit_exceeded", body)
+	}
+}
+
+func TestRateLimiterIPQPSOnlyAppliesToV1(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(0)
+	rl.UpdateIPQPSLimit(1)
 
 	router := gin.New()
 	started := make(chan struct{})
@@ -706,6 +745,56 @@ func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 	backendRecorder := httptest.NewRecorder()
 	backendReq := httptest.NewRequest(http.MethodGet, "/backend-api/codex/responses", nil)
 	backendReq.RemoteAddr = "203.0.113.11:9012"
+	router.ServeHTTP(backendRecorder, backendReq)
+	if backendRecorder.Code != http.StatusOK {
+		t.Fatalf("backend status = %d, want %d; body=%s", backendRecorder.Code, http.StatusOK, backendRecorder.Body.String())
+	}
+}
+
+func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rl := NewRateLimiter(0)
+	rl.UpdateIPBlacklist("203.0.113.20\n198.51.100.0/24")
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.GET("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	router.GET("/backend-api/codex/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	exactRecorder := httptest.NewRecorder()
+	exactReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	exactReq.RemoteAddr = "203.0.113.20:1234"
+	router.ServeHTTP(exactRecorder, exactReq)
+	if exactRecorder.Code != http.StatusForbidden {
+		t.Fatalf("exact status = %d, want %d; body=%s", exactRecorder.Code, http.StatusForbidden, exactRecorder.Body.String())
+	}
+	if body := exactRecorder.Body.String(); !strings.Contains(body, "ip_blacklisted") {
+		t.Fatalf("exact body = %s, want ip_blacklisted", body)
+	}
+
+	cidrRecorder := httptest.NewRecorder()
+	cidrReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	cidrReq.RemoteAddr = "198.51.100.88:5678"
+	router.ServeHTTP(cidrRecorder, cidrReq)
+	if cidrRecorder.Code != http.StatusForbidden {
+		t.Fatalf("cidr status = %d, want %d; body=%s", cidrRecorder.Code, http.StatusForbidden, cidrRecorder.Body.String())
+	}
+
+	allowedRecorder := httptest.NewRecorder()
+	allowedReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	allowedReq.RemoteAddr = "203.0.113.21:5678"
+	router.ServeHTTP(allowedRecorder, allowedReq)
+	if allowedRecorder.Code != http.StatusOK {
+		t.Fatalf("allowed status = %d, want %d; body=%s", allowedRecorder.Code, http.StatusOK, allowedRecorder.Body.String())
+	}
+
+	backendRecorder := httptest.NewRecorder()
+	backendReq := httptest.NewRequest(http.MethodGet, "/backend-api/codex/responses", nil)
+	backendReq.RemoteAddr = "203.0.113.20:9012"
 	router.ServeHTTP(backendRecorder, backendReq)
 	if backendRecorder.Code != http.StatusOK {
 		t.Fatalf("backend status = %d, want %d; body=%s", backendRecorder.Code, http.StatusOK, backendRecorder.Body.String())

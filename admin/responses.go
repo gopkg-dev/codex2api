@@ -63,6 +63,7 @@ type MaskedAPIKeyRow struct {
 	QuotaUsed       float64 `json:"quota_used"`
 	ExpiresAt       *string `json:"expires_at"`
 	AllowedGroupIDs []int64 `json:"allowed_group_ids"`
+	Disabled        bool    `json:"disabled"`
 	Status          string  `json:"status"`
 	CreatedAt       string  `json:"created_at"`
 }
@@ -75,7 +76,9 @@ func NewMaskedAPIKeyRow(row *database.APIKeyRow) *MaskedAPIKeyRow {
 		expiresAt = &formatted
 	}
 	status := "active"
-	if row.IsExpired(time.Now()) {
+	if row.IsDisabled() {
+		status = "disabled"
+	} else if row.IsExpired(time.Now()) {
 		status = "expired"
 	} else if row.IsQuotaExhausted() {
 		status = "quota_exhausted"
@@ -89,6 +92,7 @@ func NewMaskedAPIKeyRow(row *database.APIKeyRow) *MaskedAPIKeyRow {
 		QuotaUsed:       row.QuotaUsed,
 		ExpiresAt:       expiresAt,
 		AllowedGroupIDs: append([]int64(nil), row.AllowedGroupIDs...),
+		Disabled:        row.Disabled,
 		Status:          status,
 		CreatedAt:       row.CreatedAt.Format(time.RFC3339),
 	}
@@ -102,22 +106,25 @@ type createAPIKeyResponse struct {
 	QuotaUsed       float64 `json:"quota_used"`
 	ExpiresAt       *string `json:"expires_at"`
 	AllowedGroupIDs []int64 `json:"allowed_group_ids"`
+	Disabled        bool    `json:"disabled"`
 }
 
 type opsOverviewResponse struct {
-	UpdatedAt      string              `json:"updated_at"`
-	UptimeSeconds  int64               `json:"uptime_seconds"`
-	DatabaseDriver string              `json:"database_driver"`
-	DatabaseLabel  string              `json:"database_label"`
-	CacheDriver    string              `json:"cache_driver"`
-	CacheLabel     string              `json:"cache_label"`
-	CPU            opsCPUResponse      `json:"cpu"`
-	Memory         opsMemoryResponse   `json:"memory"`
-	Runtime        opsRuntimeResponse  `json:"runtime"`
-	Requests       opsRequestsResponse `json:"requests"`
-	Postgres       opsDatabaseResponse `json:"postgres"`
-	Redis          opsRedisResponse    `json:"redis"`
-	Traffic        opsTrafficResponse  `json:"traffic"`
+	UpdatedAt      string                 `json:"updated_at"`
+	UptimeSeconds  int64                  `json:"uptime_seconds"`
+	DatabaseDriver string                 `json:"database_driver"`
+	DatabaseLabel  string                 `json:"database_label"`
+	CacheDriver    string                 `json:"cache_driver"`
+	CacheLabel     string                 `json:"cache_label"`
+	CPU            opsCPUResponse         `json:"cpu"`
+	Memory         opsMemoryResponse      `json:"memory"`
+	Runtime        opsRuntimeResponse     `json:"runtime"`
+	Requests       opsRequestsResponse    `json:"requests"`
+	Postgres       opsDatabaseResponse    `json:"postgres"`
+	Redis          opsRedisResponse       `json:"redis"`
+	Traffic        opsTrafficResponse     `json:"traffic"`
+	Network        opsNetworkResponse     `json:"network"`
+	IPStats        []database.IPUsageStat `json:"ip_stats"`
 }
 
 type opsCPUResponse struct {
@@ -174,6 +181,34 @@ type opsTrafficResponse struct {
 	TodayTokens   int64   `json:"today_tokens"`
 	RPMLimit      int     `json:"rpm_limit"`
 	AvgDurationMs float64 `json:"avg_duration_ms"`
+}
+
+type opsNetworkResponse struct {
+	RxBytes    uint64 `json:"rx_bytes"`
+	TxBytes    uint64 `json:"tx_bytes"`
+	TotalBytes uint64 `json:"total_bytes"`
+}
+
+type publicHomeResponse struct {
+	Status      string                    `json:"status"`
+	UpdatedAt   string                    `json:"updated_at"`
+	Usage       *database.UsageStats      `json:"usage"`
+	Ops         opsOverviewResponse       `json:"ops"`
+	Maintenance publicMaintenanceResponse `json:"maintenance"`
+	LatestKey   string                    `json:"latest_key"`
+}
+
+type publicMaintenanceResponse struct {
+	Enabled     bool                             `json:"enabled"`
+	Message     string                           `json:"message"`
+	RoutesCount int                              `json:"routes_count"`
+	Routes      []publicMaintenanceRouteResponse `json:"routes"`
+}
+
+type publicMaintenanceRouteResponse struct {
+	Path        string `json:"path"`
+	Message     string `json:"message"`
+	Maintenance bool   `json:"maintenance"`
 }
 
 func writeError(c *gin.Context, statusCode int, message string) {

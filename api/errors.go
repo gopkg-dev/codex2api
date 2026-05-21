@@ -15,26 +15,27 @@ type ErrorCode string
 // Standard error codes following OpenAI API conventions
 const (
 	// Authentication errors
-	ErrCodeMissingAPIKey    ErrorCode = "missing_api_key"
-	ErrCodeInvalidAPIKey    ErrorCode = "invalid_api_key"
+	ErrCodeMissingAPIKey     ErrorCode = "missing_api_key"
+	ErrCodeInvalidAPIKey     ErrorCode = "invalid_api_key"
+	ErrCodeDisabledAPIKey    ErrorCode = "disabled_api_key"
 	ErrCodeInsufficientScope ErrorCode = "insufficient_scope"
-	ErrCodeInvalidAuth      ErrorCode = "invalid_auth"
+	ErrCodeInvalidAuth       ErrorCode = "invalid_auth"
 
 	// Request errors
-	ErrCodeInvalidRequest     ErrorCode = "invalid_request"
-	ErrCodeInvalidParameter   ErrorCode = "invalid_parameter"
-	ErrCodeMissingField       ErrorCode = "missing_field"
-	ErrCodeInvalidFieldType   ErrorCode = "invalid_field_type"
-	ErrCodeInvalidFieldFormat ErrorCode = "invalid_field_format"
+	ErrCodeInvalidRequest        ErrorCode = "invalid_request"
+	ErrCodeInvalidParameter      ErrorCode = "invalid_parameter"
+	ErrCodeMissingField          ErrorCode = "missing_field"
+	ErrCodeInvalidFieldType      ErrorCode = "invalid_field_type"
+	ErrCodeInvalidFieldFormat    ErrorCode = "invalid_field_format"
 	ErrCodeContextLengthExceeded ErrorCode = "context_length_exceeded"
-	ErrCodeUnsupportedModel   ErrorCode = "unsupported_model"
-	ErrCodeRateLimitReached   ErrorCode = "rate_limit_reached"
+	ErrCodeUnsupportedModel      ErrorCode = "unsupported_model"
+	ErrCodeRateLimitReached      ErrorCode = "rate_limit_reached"
 
 	// Server errors
-	ErrCodeServerError     ErrorCode = "server_error"
+	ErrCodeServerError        ErrorCode = "server_error"
 	ErrCodeServiceUnavailable ErrorCode = "service_unavailable"
-	ErrCodeUpstreamError   ErrorCode = "upstream_error"
-	ErrCodeUpstreamTimeout ErrorCode = "upstream_timeout"
+	ErrCodeUpstreamError      ErrorCode = "upstream_error"
+	ErrCodeUpstreamTimeout    ErrorCode = "upstream_timeout"
 
 	// Resource errors
 	ErrCodeResourceNotFound ErrorCode = "resource_not_found"
@@ -118,7 +119,7 @@ var (
 // HTTPStatusCode returns the appropriate HTTP status code for an error code
 func HTTPStatusCode(code ErrorCode) int {
 	switch code {
-	case ErrCodeMissingAPIKey, ErrCodeInvalidAPIKey, ErrCodeInvalidAuth, ErrCodeInsufficientScope:
+	case ErrCodeMissingAPIKey, ErrCodeInvalidAPIKey, ErrCodeDisabledAPIKey, ErrCodeInvalidAuth, ErrCodeInsufficientScope:
 		return http.StatusUnauthorized
 	case ErrCodeRateLimitReached:
 		return http.StatusTooManyRequests

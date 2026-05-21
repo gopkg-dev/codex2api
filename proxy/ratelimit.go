@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -73,6 +74,15 @@ func newTokenBucket(rpm int) *tokenBucket {
 		tokens:     float64(rpm),
 		maxTokens:  float64(rpm),
 		refillRate: rps,
+		lastRefill: time.Now(),
+	}
+}
+
+func newTokenBucketPerSecond(qps int) *tokenBucket {
+	return &tokenBucket{
+		tokens:     float64(qps),
+		maxTokens:  float64(qps),
+		refillRate: float64(qps),
 		lastRefill: time.Now(),
 	}
 }
@@ -787,20 +797,28 @@ func ComputeCooldown(prevLevel int) (time.Duration, int) {
 
 // RateLimiter 全局限流器（向后兼容）
 type RateLimiter struct {
-	enhanced                 *EnhancedRateLimiter
-	ipMu                     sync.Mutex
-	ipActive                 map[string]int
-	ipBuckets                map[string]*tokenBucket
-	ipConcurrencyLimitAtomic int64
-	ipRPMLimitAtomic         int64
+	enhanced         *EnhancedRateLimiter
+	ipMu             sync.Mutex
+	ipBuckets        map[string]*tokenBucket
+	ipQPSBuckets     map[string]*tokenBucket
+	ipBlacklistRaw   string
+	ipBlacklist      []ipBlacklistEntry
+	ipQPSLimitAtomic int64
+	ipRPMLimitAtomic int64
+}
+
+type ipBlacklistEntry struct {
+	raw    string
+	addr   netip.Addr
+	prefix netip.Prefix
 }
 
 // NewRateLimiter 创建限流器（向后兼容）
 func NewRateLimiter(rpm int) *RateLimiter {
 	return &RateLimiter{
-		enhanced:  NewEnhancedRateLimiter(nil, rpm, 0, 0),
-		ipActive:  make(map[string]int),
-		ipBuckets: make(map[string]*tokenBucket),
+		enhanced:     NewEnhancedRateLimiter(nil, rpm, 0, 0),
+		ipBuckets:    make(map[string]*tokenBucket),
+		ipQPSBuckets: make(map[string]*tokenBucket),
 	}
 }
 
@@ -819,15 +837,20 @@ func (rl *RateLimiter) GetRPM() int {
 	return 0
 }
 
-func (rl *RateLimiter) UpdateIPConcurrencyLimit(limit int) {
+func (rl *RateLimiter) UpdateIPQPSLimit(limit int) {
 	if limit < 0 {
 		limit = 0
 	}
-	atomic.StoreInt64(&rl.ipConcurrencyLimitAtomic, int64(limit))
+	old := atomic.SwapInt64(&rl.ipQPSLimitAtomic, int64(limit))
+	if old != int64(limit) {
+		rl.ipMu.Lock()
+		rl.ipQPSBuckets = make(map[string]*tokenBucket)
+		rl.ipMu.Unlock()
+	}
 }
 
-func (rl *RateLimiter) GetIPConcurrencyLimit() int {
-	return int(atomic.LoadInt64(&rl.ipConcurrencyLimitAtomic))
+func (rl *RateLimiter) GetIPQPSLimit() int {
+	return int(atomic.LoadInt64(&rl.ipQPSLimitAtomic))
 }
 
 func (rl *RateLimiter) UpdateIPRPMLimit(limit int) {
@@ -844,6 +867,97 @@ func (rl *RateLimiter) UpdateIPRPMLimit(limit int) {
 
 func (rl *RateLimiter) GetIPRPMLimit() int {
 	return int(atomic.LoadInt64(&rl.ipRPMLimitAtomic))
+}
+
+func (rl *RateLimiter) UpdateIPBlacklist(raw string) {
+	raw = strings.TrimSpace(raw)
+	entries := parseIPBlacklistEntries(raw)
+	rl.ipMu.Lock()
+	rl.ipBlacklistRaw = raw
+	rl.ipBlacklist = entries
+	rl.ipMu.Unlock()
+}
+
+func (rl *RateLimiter) GetIPBlacklist() string {
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	return rl.ipBlacklistRaw
+}
+
+func (rl *RateLimiter) isIPBlacklisted(ip string) bool {
+	addr, ok := parseRateLimitIPAddr(ip)
+	if !ok {
+		return false
+	}
+	rl.ipMu.Lock()
+	entries := append([]ipBlacklistEntry(nil), rl.ipBlacklist...)
+	rl.ipMu.Unlock()
+	for _, entry := range entries {
+		if entry.prefix.IsValid() {
+			if entry.prefix.Contains(addr) {
+				return true
+			}
+			continue
+		}
+		if entry.addr.IsValid() && entry.addr == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func parseIPBlacklistEntries(raw string) []ipBlacklistEntry {
+	fields := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == ';'
+	})
+	entries := make([]ipBlacklistEntry, 0, len(fields))
+	seen := map[string]struct{}{}
+	for _, field := range fields {
+		value := strings.TrimSpace(field)
+		if value == "" || strings.HasPrefix(value, "#") {
+			continue
+		}
+		if strings.Contains(value, "/") {
+			prefix, err := netip.ParsePrefix(value)
+			if err != nil {
+				continue
+			}
+			prefix = prefix.Masked()
+			key := prefix.String()
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			entries = append(entries, ipBlacklistEntry{raw: value, prefix: prefix})
+			continue
+		}
+		addr, ok := parseRateLimitIPAddr(value)
+		if !ok {
+			continue
+		}
+		key := addr.String()
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		entries = append(entries, ipBlacklistEntry{raw: value, addr: addr})
+	}
+	return entries
+}
+
+func parseRateLimitIPAddr(value string) (netip.Addr, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return netip.Addr{}, false
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return addr.Unmap(), true
 }
 
 func (rl *RateLimiter) allowIPRPM(ip string) bool {
@@ -864,38 +978,22 @@ func (rl *RateLimiter) allowIPRPM(ip string) bool {
 	return bucket.allow()
 }
 
-func (rl *RateLimiter) tryAcquireIP(ip string) bool {
-	limit := rl.GetIPConcurrencyLimit()
+func (rl *RateLimiter) allowIPQPS(ip string) bool {
+	limit := rl.GetIPQPSLimit()
 	if limit <= 0 || ip == "" {
 		return true
 	}
 	rl.ipMu.Lock()
-	defer rl.ipMu.Unlock()
-	if rl.ipActive == nil {
-		rl.ipActive = make(map[string]int)
+	if rl.ipQPSBuckets == nil {
+		rl.ipQPSBuckets = make(map[string]*tokenBucket)
 	}
-	if rl.ipActive[ip] >= limit {
-		return false
+	bucket := rl.ipQPSBuckets[ip]
+	if bucket == nil {
+		bucket = newTokenBucketPerSecond(limit)
+		rl.ipQPSBuckets[ip] = bucket
 	}
-	rl.ipActive[ip]++
-	return true
-}
-
-func (rl *RateLimiter) releaseIP(ip string) {
-	if rl.GetIPConcurrencyLimit() <= 0 || ip == "" {
-		return
-	}
-	rl.ipMu.Lock()
-	defer rl.ipMu.Unlock()
-	if rl.ipActive == nil {
-		return
-	}
-	count := rl.ipActive[ip]
-	if count <= 1 {
-		delete(rl.ipActive, ip)
-		return
-	}
-	rl.ipActive[ip] = count - 1
+	rl.ipMu.Unlock()
+	return bucket.allow()
 }
 
 // Middleware 返回 Gin 中间件（向后兼容）
@@ -923,6 +1021,17 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 		}
 		clientIP := rateLimitClientIP(c)
 		if rateLimitIsV1Path(path) {
+			if rl.isIPBlacklisted(clientIP) {
+				c.JSON(http.StatusForbidden, gin.H{
+					"error": gin.H{
+						"message": "当前 IP 已被禁止访问 /v1 接口",
+						"type":    "permission_error",
+						"code":    "ip_blacklisted",
+					},
+				})
+				c.Abort()
+				return
+			}
 			if !rl.allowIPRPM(clientIP) {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"error": gin.H{
@@ -934,18 +1043,17 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			if !rl.tryAcquireIP(clientIP) {
+			if !rl.allowIPQPS(clientIP) {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"error": gin.H{
-						"message": "同一 IP 并发请求过多，请稍后重试",
+						"message": "同一 IP QPS 超出限制，请稍后重试",
 						"type":    "rate_limit_error",
-						"code":    "ip_concurrency_limit_exceeded",
+						"code":    "ip_qps_limit_exceeded",
 					},
 				})
 				c.Abort()
 				return
 			}
-			defer rl.releaseIP(clientIP)
 		}
 		c.Next()
 	}

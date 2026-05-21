@@ -3,6 +3,7 @@ package admin
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"os"
 	"runtime"
 	"strconv"
@@ -154,21 +155,20 @@ func parseMeminfoKB(line string) uint64 {
 	return v
 }
 
-// GetOpsOverview 获取系统运维概览
-func (h *Handler) GetOpsOverview(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
-	defer cancel()
-
+func (h *Handler) buildOpsOverview(ctx context.Context) (opsOverviewResponse, error) {
 	usageStats, err := h.getUsageStatsCached(ctx)
 	if err != nil {
-		writeInternalError(c, err)
-		return
+		return opsOverviewResponse{}, err
 	}
 
 	trafficSnapshot, err := h.db.GetTrafficSnapshot(ctx)
 	if err != nil {
-		writeInternalError(c, err)
-		return
+		return opsOverviewResponse{}, err
+	}
+
+	ipStats, err := h.db.GetIPUsageStats(ctx, 8)
+	if err != nil {
+		return opsOverviewResponse{}, err
 	}
 
 	dbHealthy := h.db.Ping(ctx) == nil
@@ -215,7 +215,9 @@ func (h *Handler) GetOpsOverview(c *gin.Context) {
 		totalRuntimeRequests += acc.GetTotalRequests()
 	}
 
-	c.JSON(200, opsOverviewResponse{
+	rxBytes, txBytes := readSystemNetworkBytes()
+
+	return opsOverviewResponse{
 		UpdatedAt:      time.Now().Format(time.RFC3339),
 		UptimeSeconds:  int64(time.Since(h.startedAt).Seconds()),
 		DatabaseDriver: h.databaseDriver,
@@ -271,5 +273,67 @@ func (h *Handler) GetOpsOverview(c *gin.Context) {
 			RPMLimit:      h.rateLimiter.GetRPM(),
 			AvgDurationMs: usageStats.AvgDurationMs,
 		},
-	})
+		Network: opsNetworkResponse{
+			RxBytes:    rxBytes,
+			TxBytes:    txBytes,
+			TotalBytes: rxBytes + txBytes,
+		},
+		IPStats: ipStats,
+	}, nil
+}
+
+func readSystemNetworkBytes() (rxBytes uint64, txBytes uint64) {
+	if runtime.GOOS != "linux" {
+		return 0, 0
+	}
+
+	file, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return 0, 0
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.Contains(line, ":") {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		iface := strings.TrimSpace(parts[0])
+		if iface == "" || iface == "lo" {
+			continue
+		}
+		fields := strings.Fields(parts[1])
+		if len(fields) < 16 {
+			continue
+		}
+		rx, rxErr := strconv.ParseUint(fields[0], 10, 64)
+		tx, txErr := strconv.ParseUint(fields[8], 10, 64)
+		if rxErr == nil {
+			rxBytes += rx
+		}
+		if txErr == nil {
+			txBytes += tx
+		}
+	}
+
+	return rxBytes, txBytes
+}
+
+// GetOpsOverview 获取系统运维概览
+func (h *Handler) GetOpsOverview(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	overview, err := h.buildOpsOverview(ctx)
+	if err != nil {
+		writeInternalError(c, fmt.Errorf("获取运维概览失败: %w", err))
+		return
+	}
+
+	c.JSON(200, overview)
 }

@@ -69,8 +69,9 @@ func main() {
 			SiteName:                         database.DefaultSiteName,
 			MaxConcurrency:                   2,
 			GlobalRPM:                        0,
-			IPConcurrencyLimit:               0,
+			IPQPSLimit:                       0,
 			IPRPMLimit:                       0,
+			IPBlacklist:                      "",
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -107,8 +108,9 @@ func main() {
 			SiteName:                         database.DefaultSiteName,
 			MaxConcurrency:                   2,
 			GlobalRPM:                        0,
-			IPConcurrencyLimit:               0,
+			IPQPSLimit:                       0,
 			IPRPMLimit:                       0,
+			IPBlacklist:                      "",
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -224,8 +226,9 @@ func main() {
 
 	// 全局 RPM 限流器
 	rateLimiter := proxy.NewRateLimiter(settings.GlobalRPM)
-	rateLimiter.UpdateIPConcurrencyLimit(settings.IPConcurrencyLimit)
+	rateLimiter.UpdateIPQPSLimit(settings.IPQPSLimit)
 	rateLimiter.UpdateIPRPMLimit(settings.IPRPMLimit)
+	rateLimiter.UpdateIPBlacklist(settings.IPBlacklist)
 	adminHandler := admin.NewHandler(store, db, tc, rateLimiter, cfg.AdminSecret)
 	// 初始化 admin handler 的连接池设置跟踪
 	adminHandler.SetPoolSizes(settings.PgMaxConns, settings.RedisPoolSize)
@@ -267,11 +270,14 @@ func main() {
 	if settings.GlobalRPM > 0 {
 		log.Printf("全局限流已生效: %d RPM", settings.GlobalRPM)
 	}
-	if settings.IPConcurrencyLimit > 0 {
-		log.Printf("IP 并发限制已生效: %d", settings.IPConcurrencyLimit)
+	if settings.IPQPSLimit > 0 {
+		log.Printf("IP QPS 限制已生效: %d", settings.IPQPSLimit)
 	}
 	if settings.IPRPMLimit > 0 {
 		log.Printf("IP RPM 限制已生效: %d", settings.IPRPMLimit)
+	}
+	if strings.TrimSpace(settings.IPBlacklist) != "" {
+		log.Printf("IP 黑名单已生效")
 	}
 	log.Printf("单账号并发上限: %d", settings.MaxConcurrency)
 
@@ -279,6 +285,7 @@ func main() {
 	adminHandler.RegisterRoutes(r)
 
 	// 管理后台前端静态文件
+	var servePublicHome gin.HandlerFunc
 	subFS, err := fs.Sub(frontendFS, "frontend/dist")
 	if err != nil {
 		log.Printf("前端静态文件加载失败（开发模式可忽略）: %v", err)
@@ -310,12 +317,20 @@ func main() {
 		r.GET("/admin/*filepath", serveAdmin)
 		r.HEAD("/admin", serveAdmin)
 		r.HEAD("/admin/*filepath", serveAdmin)
+
+		servePublicHome = func(c *gin.Context) {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
+		}
 	}
 
-	// 根路径重定向到管理后台（使用 302 避免浏览器永久缓存）
-	r.GET("/", func(c *gin.Context) {
-		c.Redirect(http.StatusFound, "/admin/")
-	})
+	if servePublicHome != nil {
+		r.GET("/", servePublicHome)
+		r.HEAD("/", servePublicHome)
+	} else {
+		r.GET("/", func(c *gin.Context) {
+			c.Redirect(http.StatusFound, "/admin/")
+		})
+	}
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

@@ -6,6 +6,7 @@ import RouteErrorBoundary from './components/RouteErrorBoundary'
 import StateShell from './components/StateShell'
 import { BrandingProvider } from './branding'
 import Dashboard from './pages/Dashboard'
+import PublicHome from './pages/PublicHome'
 
 const Accounts = lazy(() => import('./pages/Accounts'))
 const Operations = lazy(() => import('./pages/Operations'))
@@ -20,6 +21,21 @@ const ImageStudio = lazy(() => import('./pages/ImageStudio'))
 const PromptFilter = lazy(() => import('./pages/PromptFilter'))
 
 export default function App() {
+  const isAdminShell = window.location.pathname.startsWith('/admin')
+
+  if (!isAdminShell) {
+    return (
+      <BrandingProvider>
+        <RouteErrorBoundary>
+          <Routes>
+            <Route path="/" element={<PublicHome />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </RouteErrorBoundary>
+      </BrandingProvider>
+    )
+  }
+
   return (
     <BrandingProvider>
       <AuthGate>

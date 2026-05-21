@@ -676,13 +676,14 @@ const modelPieColors = [
 ]
 const modelPieShellClass = 'flex min-h-[196px] flex-col border-l border-border pl-4 max-lg:min-h-0 max-lg:border-l-0 max-lg:border-t max-lg:pl-0 max-lg:pt-3'
 
-type UsageTableColumn = 'status' | 'model' | 'account' | 'apiKey' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'firstToken' | 'duration' | 'time'
+type UsageTableColumn = 'status' | 'model' | 'account' | 'apiKey' | 'ip' | 'endpoint' | 'type' | 'token' | 'cost' | 'cached' | 'firstToken' | 'duration' | 'time'
 
 const USAGE_COLUMN_DEFINITIONS: Array<{ key: UsageTableColumn; labelKey: string }> = [
   { key: 'status', labelKey: 'usage.tableStatus' },
   { key: 'model', labelKey: 'usage.tableModel' },
   { key: 'account', labelKey: 'usage.tableAccount' },
   { key: 'apiKey', labelKey: 'usage.tableApiKey' },
+  { key: 'ip', labelKey: 'usage.tableIP' },
   { key: 'endpoint', labelKey: 'usage.tableEndpoint' },
   { key: 'type', labelKey: 'usage.tableType' },
   { key: 'token', labelKey: 'usage.tableToken' },
@@ -699,6 +700,7 @@ const DEFAULT_USAGE_VISIBLE_COLUMNS: Record<UsageTableColumn, boolean> = {
   model: true,
   account: true,
   apiKey: true,
+  ip: true,
   endpoint: true,
   type: true,
   token: true,
@@ -1274,6 +1276,7 @@ export default function Usage() {
                       {visibleColumns.model && <TableHead className={usageTableHeadClass}>{t('usage.tableModel')}</TableHead>}
                       {visibleColumns.account && <TableHead className={usageTableHeadClass}>{t('usage.tableAccount')}</TableHead>}
                       {visibleColumns.apiKey && <TableHead className={usageTableHeadClass}>{t('usage.tableApiKey')}</TableHead>}
+                      {visibleColumns.ip && <TableHead className={usageTableHeadClass}>{t('usage.tableIP')}</TableHead>}
                       {visibleColumns.endpoint && <TableHead className={usageTableHeadClass}>{t('usage.tableEndpoint')}</TableHead>}
                       {visibleColumns.type && <TableHead className={usageTableHeadClass}>{t('usage.tableType')}</TableHead>}
                       {visibleColumns.token && <TableHead className={usageTableHeadClass}>{t('usage.tableToken')}</TableHead>}
@@ -1336,6 +1339,9 @@ export default function Usage() {
                           <span className="block max-w-[180px] truncate whitespace-nowrap font-mono text-[12px]" title={formatUsageAPIKeyLabel(log.api_key_name, log.api_key_masked) || t('usage.unknownApiKey')}>
                             {formatUsageAPIKeyLabel(log.api_key_name, log.api_key_masked) || t('usage.unknownApiKey')}
                           </span>
+                        </TableCell>}
+                        {visibleColumns.ip && <TableCell className={`${usageTableMonoClass} text-muted-foreground whitespace-nowrap`}>
+                          {log.client_ip || '-'}
                         </TableCell>}
                         {visibleColumns.endpoint && <TableCell>
                           <div className={`${usageTableMonoClass} leading-relaxed`}>

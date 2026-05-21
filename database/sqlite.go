@@ -66,6 +66,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			api_key_id INTEGER DEFAULT 0,
 			api_key_name TEXT DEFAULT '',
 			api_key_masked TEXT DEFAULT '',
+			client_ip TEXT DEFAULT '',
 			image_count INTEGER DEFAULT 0,
 			image_width INTEGER DEFAULT 0,
 			image_height INTEGER DEFAULT 0,
@@ -81,6 +82,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			quota_limit REAL DEFAULT 0,
 			quota_used REAL DEFAULT 0,
 			allowed_group_ids TEXT DEFAULT '[]',
+			disabled INTEGER DEFAULT 0,
 			expires_at TIMESTAMP NULL,
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -109,11 +111,12 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS system_settings (
 					id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
 					site_name TEXT DEFAULT 'CodexProxy',
-					site_logo TEXT DEFAULT '',
-					max_concurrency INTEGER DEFAULT 2,
+				site_logo TEXT DEFAULT '',
+				max_concurrency INTEGER DEFAULT 2,
 				global_rpm INTEGER DEFAULT 0,
-				ip_concurrency_limit INTEGER DEFAULT 0,
+				ip_qps_limit INTEGER DEFAULT 0,
 				ip_rpm_limit INTEGER DEFAULT 0,
+				ip_blacklist TEXT DEFAULT '',
 				test_model TEXT DEFAULT 'gpt-5.4',
 				test_concurrency INTEGER DEFAULT 50,
 				proxy_url TEXT DEFAULT '',
@@ -143,6 +146,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				image_storage_config TEXT DEFAULT '{}',
 				scheduler_mode TEXT DEFAULT 'round_robin',
 				filter_local_fallback_response INTEGER DEFAULT 1,
+				api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。',
 				api_maintenance_config TEXT DEFAULT '{}'
 			);`,
 		`CREATE TABLE IF NOT EXISTS model_registry (
@@ -276,6 +280,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"usage_logs", "api_key_id", "INTEGER DEFAULT 0"},
 		{"usage_logs", "api_key_name", "TEXT DEFAULT ''"},
 		{"usage_logs", "api_key_masked", "TEXT DEFAULT ''"},
+		{"usage_logs", "client_ip", "TEXT DEFAULT ''"},
 		{"usage_logs", "image_count", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_width", "INTEGER DEFAULT 0"},
 		{"usage_logs", "image_height", "INTEGER DEFAULT 0"},
@@ -291,6 +296,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"api_keys", "quota_limit", "REAL DEFAULT 0"},
 		{"api_keys", "quota_used", "REAL DEFAULT 0"},
 		{"api_keys", "allowed_group_ids", "TEXT DEFAULT '[]'"},
+		{"api_keys", "disabled", "INTEGER DEFAULT 0"},
 		{"api_keys", "expires_at", "TIMESTAMP NULL"},
 		{"account_groups", "description", "TEXT DEFAULT ''"},
 		{"account_groups", "color", "TEXT DEFAULT ''"},
@@ -299,8 +305,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"account_groups", "updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"},
 		{"system_settings", "site_name", "TEXT DEFAULT 'CodexProxy'"},
 		{"system_settings", "site_logo", "TEXT DEFAULT ''"},
-		{"system_settings", "ip_concurrency_limit", "INTEGER DEFAULT 0"},
+		{"system_settings", "ip_qps_limit", "INTEGER DEFAULT 0"},
 		{"system_settings", "ip_rpm_limit", "INTEGER DEFAULT 0"},
+		{"system_settings", "ip_blacklist", "TEXT DEFAULT ''"},
 		{"system_settings", "pg_max_conns", "INTEGER DEFAULT 50"},
 		{"system_settings", "redis_pool_size", "INTEGER DEFAULT 30"},
 		{"system_settings", "auto_clean_unauthorized", "INTEGER DEFAULT 0"},
@@ -339,6 +346,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "image_storage_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "scheduler_mode", "TEXT DEFAULT 'round_robin'"},
 		{"system_settings", "filter_local_fallback_response", "INTEGER DEFAULT 1"},
+		{"system_settings", "api_key_disabled_message", "TEXT DEFAULT 'API Key 已被禁用，请联系管理员。'"},
 		{"system_settings", "api_maintenance_config", "TEXT DEFAULT '{}'"},
 		{"accounts", "enabled", "INTEGER DEFAULT 1"},
 		{"accounts", "locked", "INTEGER DEFAULT 0"},
@@ -357,6 +365,22 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			return err
 		}
 	}
+	systemColumns, err := db.sqliteTableColumns(ctx, "system_settings")
+	if err != nil {
+		return err
+	}
+	if _, ok := systemColumns["ip_concurrency_limit"]; ok {
+		if _, err := db.conn.ExecContext(ctx, `
+			UPDATE system_settings
+			SET ip_qps_limit = COALESCE(NULLIF(ip_qps_limit, 0), ip_concurrency_limit, 0)
+			WHERE COALESCE(ip_qps_limit, 0) = 0 AND COALESCE(ip_concurrency_limit, 0) > 0
+		`); err != nil {
+			return err
+		}
+		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN ip_concurrency_limit`); err != nil {
+			return err
+		}
+	}
 
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);`,
@@ -367,6 +391,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_created_status ON usage_logs(created_at, status_code);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_account_status ON usage_logs(account_id, status_code);`,
 		`CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_created_at ON usage_logs(api_key_id, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_usage_logs_client_ip_created_at ON usage_logs(client_ip, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_api_keys_expires_at ON api_keys(expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_group_members_group ON account_group_members(group_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_group_members_account ON account_group_members(account_id);`,

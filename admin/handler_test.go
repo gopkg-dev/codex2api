@@ -232,7 +232,7 @@ func TestUpdateAPIKeyPreservesOmittedFieldsAndUpdatesLimits(t *testing.T) {
 	recorder = httptest.NewRecorder()
 	ctx, _ = gin.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", id)}}
-	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/admin/keys/1", strings.NewReader(`{"quota_limit":0,"expires_at":null}`))
+	ctx.Request = httptest.NewRequest(http.MethodPatch, "/api/admin/keys/1", strings.NewReader(`{"quota_limit":0,"expires_at":null,"disabled":true}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	handler.UpdateAPIKey(ctx)
@@ -244,8 +244,8 @@ func TestUpdateAPIKeyPreservesOmittedFieldsAndUpdatesLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetAPIKeyByID 返回错误: %v", err)
 	}
-	if row.Name != "Client B" || row.QuotaLimit != 0 || row.ExpiresAt.Valid {
-		t.Fatalf("row = %#v, want quota/expiration cleared with name preserved", row)
+	if row.Name != "Client B" || row.QuotaLimit != 0 || row.ExpiresAt.Valid || !row.Disabled {
+		t.Fatalf("row = %#v, want quota/expiration cleared with name preserved and disabled", row)
 	}
 }
 
@@ -336,7 +336,7 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 		StreamFlushIntervalMS:            20,
 		ImageStorageConfig:               "{}",
-		IPConcurrencyLimit:               2,
+		IPQPSLimit:                       2,
 		IPRPMLimit:                       20,
 		FilterLocalFallbackResponse:      true,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
@@ -348,9 +348,11 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	store := auth.NewStore(db, tc, settings)
 	handler := NewHandler(store, db, tc, proxy.NewRateLimiter(0), "")
 	body := `{
-		"ip_concurrency_limit": 4,
+		"ip_qps_limit": 4,
 		"ip_rpm_limit": 9,
+		"ip_blacklist": "203.0.113.20\n198.51.100.0/24",
 		"filter_local_fallback_response": false,
+		"api_key_disabled_message": "这个 API Key 已暂停使用",
 		"api_maintenance_enabled": true,
 		"api_maintenance_message": "维护中",
 		"api_maintenance_sse_randomize": true,
@@ -374,14 +376,20 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if payload.FilterLocalFallbackResponse {
 		t.Fatal("FilterLocalFallbackResponse = true, want false")
 	}
+	if payload.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
+		t.Fatalf("APIKeyDisabledMessage = %q, want custom message", payload.APIKeyDisabledMessage)
+	}
 	if !payload.APIMaintenanceEnabled || payload.APIMaintenanceMessage != "维护中" || !payload.APIMaintenanceSSERandomize {
 		t.Fatalf("maintenance response = %#v", payload)
 	}
-	if payload.IPConcurrencyLimit != 4 {
-		t.Fatalf("IPConcurrencyLimit = %d, want 4", payload.IPConcurrencyLimit)
+	if payload.IPQPSLimit != 4 {
+		t.Fatalf("IPQPSLimit = %d, want 4", payload.IPQPSLimit)
 	}
 	if payload.IPRPMLimit != 9 {
 		t.Fatalf("IPRPMLimit = %d, want 9", payload.IPRPMLimit)
+	}
+	if payload.IPBlacklist != "203.0.113.20\n198.51.100.0/24" {
+		t.Fatalf("IPBlacklist = %q, want configured blacklist", payload.IPBlacklist)
 	}
 
 	gotSettings, err := db.GetSystemSettings(context.Background())
@@ -391,21 +399,33 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if gotSettings.FilterLocalFallbackResponse {
 		t.Fatal("persisted FilterLocalFallbackResponse = true, want false")
 	}
-	if gotSettings.IPConcurrencyLimit != 4 {
-		t.Fatalf("persisted IPConcurrencyLimit = %d, want 4", gotSettings.IPConcurrencyLimit)
+	if gotSettings.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
+		t.Fatalf("persisted APIKeyDisabledMessage = %q, want custom message", gotSettings.APIKeyDisabledMessage)
+	}
+	if gotSettings.IPQPSLimit != 4 {
+		t.Fatalf("persisted IPQPSLimit = %d, want 4", gotSettings.IPQPSLimit)
 	}
 	if gotSettings.IPRPMLimit != 9 {
 		t.Fatalf("persisted IPRPMLimit = %d, want 9", gotSettings.IPRPMLimit)
 	}
-	if got := handler.rateLimiter.GetIPConcurrencyLimit(); got != 4 {
-		t.Fatalf("runtime IPConcurrencyLimit = %d, want 4", got)
+	if gotSettings.IPBlacklist != "203.0.113.20\n198.51.100.0/24" {
+		t.Fatalf("persisted IPBlacklist = %q, want configured blacklist", gotSettings.IPBlacklist)
+	}
+	if got := handler.rateLimiter.GetIPQPSLimit(); got != 4 {
+		t.Fatalf("runtime IPQPSLimit = %d, want 4", got)
 	}
 	if got := handler.rateLimiter.GetIPRPMLimit(); got != 9 {
 		t.Fatalf("runtime IPRPMLimit = %d, want 9", got)
 	}
+	if got := handler.rateLimiter.GetIPBlacklist(); got != "203.0.113.20\n198.51.100.0/24" {
+		t.Fatalf("runtime IPBlacklist = %q, want configured blacklist", got)
+	}
 	runtimeCfg := proxy.CurrentRuntimeSettings()
 	if runtimeCfg.FilterLocalFallbackResponse {
 		t.Fatal("runtime FilterLocalFallbackResponse = true, want false")
+	}
+	if runtimeCfg.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
+		t.Fatalf("runtime APIKeyDisabledMessage = %q, want custom message", runtimeCfg.APIKeyDisabledMessage)
 	}
 	if !runtimeCfg.APIMaintenance.Enabled || runtimeCfg.APIMaintenance.Message != "维护中" {
 		t.Fatalf("runtime maintenance = %#v", runtimeCfg.APIMaintenance)

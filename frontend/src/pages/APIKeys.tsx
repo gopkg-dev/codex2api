@@ -36,6 +36,8 @@ import {
   LockKeyhole,
   Pencil,
   Plus,
+  Power,
+  PowerOff,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -85,6 +87,7 @@ export default function APIKeys() {
   const [visibleKeys, setVisibleKeys] = useState<Set<number>>(new Set());
   const [creating, setCreating] = useState(false);
   const [deletingIds, setDeletingIds] = useState<Set<number>>(new Set());
+  const [togglingIds, setTogglingIds] = useState<Set<number>>(new Set());
   const [editingKey, setEditingKey] = useState<APIKeyRow | null>(null);
   const [editForm, setEditForm] = useState<EditKeyFormState>(initialEditForm);
   const [saving, setSaving] = useState(false);
@@ -215,6 +218,27 @@ export default function APIKeys() {
       setDeletingIds((prev) => {
         const next = new Set(prev);
         next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleToggleDisabled = async (keyRow: APIKeyRow) => {
+    const nextDisabled = !keyRow.disabled;
+    setTogglingIds((prev) => new Set(prev).add(keyRow.id));
+    try {
+      await api.updateAPIKey(keyRow.id, { disabled: nextDisabled });
+      showToast(nextDisabled ? t("apiKeys.keyDisabled") : t("apiKeys.keyEnabled"));
+      void reload();
+    } catch (error) {
+      showToast(
+        `${t("apiKeys.updateFailed")}: ${getErrorMessage(error)}`,
+        "error",
+      );
+    } finally {
+      setTogglingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(keyRow.id);
         return next;
       });
     }
@@ -523,6 +547,21 @@ export default function APIKeys() {
                             </TableCell>
                             <TableCell>
                               <div className="flex justify-end gap-1.5">
+                                <Button
+                                  variant={keyRow.disabled ? "outline" : "secondary"}
+                                  size="sm"
+                                  disabled={togglingIds.has(keyRow.id)}
+                                  onClick={() => void handleToggleDisabled(keyRow)}
+                                >
+                                  {keyRow.disabled ? (
+                                    <Power className="size-3.5" />
+                                  ) : (
+                                    <PowerOff className="size-3.5" />
+                                  )}
+                                  {keyRow.disabled
+                                    ? t("apiKeys.enableKey")
+                                    : t("apiKeys.disableKey")}
+                                </Button>
                                 <Button
                                   variant="outline"
                                   size="sm"
@@ -894,7 +933,10 @@ function toDateTimeLocalValue(value?: string | null) {
 
 function getAPIKeyStatus(
   keyRow: APIKeyRow,
-): "active" | "expired" | "quota_exhausted" {
+): "active" | "expired" | "quota_exhausted" | "disabled" {
+  if (keyRow.disabled || keyRow.status === "disabled") {
+    return "disabled";
+  }
   if (keyRow.status === "expired" || keyRow.status === "quota_exhausted") {
     return keyRow.status;
   }

@@ -7,6 +7,7 @@ import {
   Cpu,
   Database,
   HardDrive,
+  Network,
   RefreshCw,
   Server,
   Users,
@@ -18,7 +19,7 @@ import PageHeader from '../components/PageHeader'
 import OpsTabs from '../components/OpsTabs'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
-import type { OpsOverviewResponse } from '../types'
+import type { IPUsageStat, OpsOverviewResponse } from '../types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
@@ -171,6 +172,8 @@ export default function Operations() {
                 </div>
               </CardContent>
             </Card>
+
+            <IPStatsCard stats={overview.ip_stats ?? []} />
           </>
         ) : null}
       </>
@@ -240,6 +243,58 @@ function OpsMetricCard({
             {icon}
           </div>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function IPStatsCard({ stats }: { stats: IPUsageStat[] }) {
+  const { t } = useTranslation()
+
+  return (
+    <Card className="mt-4">
+      <CardContent className="p-6">
+        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Network className="size-5" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="truncate text-base font-semibold text-foreground">{t('ops.ipStatsTitle')}</h3>
+              <p className="mt-1 truncate text-sm text-muted-foreground">{t('ops.ipStatsDesc')}</p>
+            </div>
+          </div>
+          <div className="text-xs font-semibold text-muted-foreground">{t('ops.autoRefresh15s')}</div>
+        </div>
+
+        {stats.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <div className="min-w-[520px]">
+              <div className="grid grid-cols-[minmax(160px,1.5fr)_repeat(4,minmax(76px,1fr))] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                <div>IP</div>
+                <div className="text-right">{t('ops.ipStatsRequests')}</div>
+                <div className="text-right">QPS</div>
+                <div className="text-right">RPM</div>
+                <div className="text-right">TPM</div>
+              </div>
+              <div className="divide-y divide-border">
+                {stats.map((item) => (
+                  <div key={item.ip} className="grid grid-cols-[minmax(160px,1.5fr)_repeat(4,minmax(76px,1fr))] items-center px-3 py-2 text-sm">
+                    <div className="truncate font-medium text-foreground" title={item.ip}>{item.ip}</div>
+                    <div className="text-right tabular-nums text-foreground">{formatNumber(item.requests)}</div>
+                    <div className="text-right tabular-nums text-foreground">{item.qps.toFixed(2)}</div>
+                    <div className="text-right tabular-nums text-foreground">{formatNumber(Math.round(item.rpm))}</div>
+                    <div className="text-right tabular-nums text-foreground">{formatNumber(Math.round(item.tpm))}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-[96px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
+            {t('ops.ipStatsEmpty')}
+          </div>
+        )}
       </CardContent>
     </Card>
   )

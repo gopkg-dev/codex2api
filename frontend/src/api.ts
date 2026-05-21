@@ -30,6 +30,7 @@ import type {
   OAuthURLResponse,
   OpsErrorSummary,
   OpsOverviewResponse,
+  PublicHomeResponse,
   PromptFilterLogsResponse,
   PromptFilterRulesResponse,
   PromptFilterTestResponse,
@@ -189,6 +190,9 @@ function buildOpsErrorSearchParams(params: {
 
 export const api = {
   getBranding: () => requestPublic<SiteBranding>('/api/branding'),
+  getPublicHome: () => requestPublic<PublicHomeResponse>('/api/public/home'),
+  getPublicChartData: (params: { start: string; end: string; bucketMinutes: number }) =>
+    requestPublic<ChartAggregation>(`/api/public/chart-data?start=${encodeURIComponent(params.start)}&end=${encodeURIComponent(params.end)}&bucket_minutes=${params.bucketMinutes}`),
   getStats: () => request<StatsResponse>('/stats'),
   getAccounts: () => request<AccountsResponse>('/accounts'),
   addAccount: (data: AddAccountRequest) =>

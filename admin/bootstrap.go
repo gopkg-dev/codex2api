@@ -215,7 +215,7 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		SiteName:                         database.DefaultSiteName,
 		MaxConcurrency:                   2,
 		GlobalRPM:                        0,
-		IPConcurrencyLimit:               0,
+		IPQPSLimit:                       0,
 		IPRPMLimit:                       0,
 		TestModel:                        "gpt-5.4",
 		TestConcurrency:                  50,
@@ -240,6 +240,8 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		StreamFlushIntervalMS:            20,
 		ImageStorageConfig:               "{}",
 		FilterLocalFallbackResponse:      true,
+		IPBlacklist:                      "",
+		APIKeyDisabledMessage:            "API Key 已被禁用，请联系管理员。",
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 	}
 }

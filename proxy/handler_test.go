@@ -101,6 +101,104 @@ func TestImageModelIsImageEndpointOnly(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareRejectsDisabledAPIKeyWithConfiguredMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "这个 API Key 已暂停使用"})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-disabled-client-1234567890"
+	if _, err := db.InsertAPIKeyWithOptions(context.Background(), database.APIKeyInput{
+		Name:     "Disabled Client",
+		Key:      key,
+		Disabled: true,
+	}); err != nil {
+		t.Fatalf("InsertAPIKeyWithOptions 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.GET("/v1/test", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Error.Code != string(api.ErrCodeDisabledAPIKey) || payload.Error.Message != "这个 API Key 已暂停使用" {
+		t.Fatalf("error = %#v, want disabled code and custom message", payload.Error)
+	}
+}
+
+func TestAuthMiddlewareDisabledAPIKeyUsesProtocolStreamResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIKeyDisabledMessage: "这个 API Key 已暂停使用",
+		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-disabled-stream-1234567890"
+	if _, err := db.InsertAPIKeyWithOptions(context.Background(), database.APIKeyInput{
+		Name:     "Disabled Stream Client",
+		Key:      key,
+		Disabled: true,
+	}); err != nil {
+		t.Fatalf("InsertAPIKeyWithOptions 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.POST("/v1/chat/completions", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "这个 API Key 已暂停使用") || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("stream body missing expected disabled-key chunks: %s", body)
+	}
+}
+
 func TestRegisterRoutesIncludesCodexDirectResponses(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

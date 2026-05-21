@@ -20,6 +20,7 @@ const (
 	defaultCodexMinCLIVersion    = "0.118.0"
 	defaultStreamFlushPolicy     = StreamFlushPolicyImmediate
 	defaultStreamFlushIntervalMS = 20
+	defaultAPIKeyDisabledMessage = "API Key 已被禁用，请联系管理员。"
 	minStreamFlushIntervalMS     = 1
 	maxStreamFlushIntervalMS     = 1000
 )
@@ -30,6 +31,7 @@ type RuntimeSettings struct {
 	StreamFlushPolicy           string
 	StreamFlushIntervalMS       int
 	FilterLocalFallbackResponse bool
+	APIKeyDisabledMessage       string
 	APIMaintenance              APIMaintenanceConfig
 }
 
@@ -46,6 +48,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		StreamFlushPolicy:           defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:       defaultStreamFlushIntervalMS,
 		FilterLocalFallbackResponse: true,
+		APIKeyDisabledMessage:       defaultAPIKeyDisabledMessage,
 		APIMaintenance:              DefaultAPIMaintenanceConfig(),
 	}
 }
@@ -89,6 +92,10 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	if settings.StreamFlushIntervalMS > maxStreamFlushIntervalMS {
 		settings.StreamFlushIntervalMS = maxStreamFlushIntervalMS
 	}
+	settings.APIKeyDisabledMessage = strings.TrimSpace(settings.APIKeyDisabledMessage)
+	if settings.APIKeyDisabledMessage == "" {
+		settings.APIKeyDisabledMessage = defaultAPIKeyDisabledMessage
+	}
 	settings.APIMaintenance = NormalizeAPIMaintenanceConfig(settings.APIMaintenance)
 	return settings
 }
@@ -101,6 +108,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.StreamFlushPolicy = settings.StreamFlushPolicy
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
 		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
+		next.APIKeyDisabledMessage = settings.APIKeyDisabledMessage
 		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)
 	}
 	next = NormalizeRuntimeSettings(next)

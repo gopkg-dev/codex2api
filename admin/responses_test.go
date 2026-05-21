@@ -288,6 +288,9 @@ func TestOpsOverviewResponse(t *testing.T) {
 			TodayTokens:   25000,
 			RPMLimit:      1000,
 		},
+		IPStats: []database.IPUsageStat{
+			{IP: "203.0.113.24", Requests: 2, QPS: 0.2, RPM: 2, TPM: 360},
+		},
 	}
 
 	if resp.DatabaseDriver != "postgres" {
@@ -298,6 +301,9 @@ func TestOpsOverviewResponse(t *testing.T) {
 	}
 	if resp.UptimeSeconds != 3600 {
 		t.Errorf("UptimeSeconds = %d, want 3600", resp.UptimeSeconds)
+	}
+	if len(resp.IPStats) != 1 || resp.IPStats[0].IP != "203.0.113.24" {
+		t.Errorf("IPStats = %#v, want 203.0.113.24", resp.IPStats)
 	}
 }
 

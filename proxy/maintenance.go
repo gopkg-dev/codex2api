@@ -270,6 +270,31 @@ func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bo
 	}
 }
 
+func writeDisabledAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
+	routePath := canonicalMaintenancePath(c.Request.URL.Path)
+	if strings.ToUpper(strings.TrimSpace(c.Request.Method)) != http.MethodPost || !isMaintenanceEndpoint(routePath) {
+		return false
+	}
+
+	rawBody, _ := io.ReadAll(c.Request.Body)
+	c.Request.Body = io.NopCloser(bytes.NewReader(rawBody))
+	model := strings.TrimSpace(gjson.GetBytes(rawBody, "model").String())
+	if model == "" {
+		model = "disabled_api_key"
+	}
+	stream := gjson.GetBytes(rawBody, "stream").Bool()
+	if strings.Contains(routePath, "/images/") {
+		stream = false
+	}
+	maintenanceCfg := NormalizeAPIMaintenanceConfig(settings.APIMaintenance)
+	writeMaintenanceResponse(c, routePath, model, stream, maintenanceResolvedConfig{
+		Message:      settings.APIKeyDisabledMessage,
+		SSERandomize: maintenanceCfg.SSERandomize,
+		ImageB64JSON: maintenanceCfg.ImageB64JSON,
+	})
+	return true
+}
+
 func buildMaintenanceChatResponse(model, message string) gin.H {
 	return gin.H{
 		"id":      maintenanceHexID("resp_"),

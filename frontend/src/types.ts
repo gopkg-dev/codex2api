@@ -294,6 +294,40 @@ export interface OpsOverviewResponse {
     rpm_limit: number
     avg_duration_ms: number
   }
+  network: {
+    rx_bytes: number
+    tx_bytes: number
+    total_bytes: number
+  }
+  ip_stats: IPUsageStat[]
+}
+
+export interface PublicHomeResponse {
+  status: 'ok' | string
+  updated_at: ISODateString
+  usage: UsageStats
+  ops: OpsOverviewResponse
+  latest_key: string
+  maintenance: {
+    enabled: boolean
+    message: string
+    routes_count: number
+    routes: PublicMaintenanceRoute[]
+  }
+}
+
+export interface PublicMaintenanceRoute {
+  path: string
+  message: string
+  maintenance: boolean
+}
+
+export interface IPUsageStat {
+  ip: string
+  requests: number
+  qps: number
+  rpm: number
+  tpm: number
 }
 
 export interface SystemSettings {
@@ -301,8 +335,9 @@ export interface SystemSettings {
   site_logo: string
   max_concurrency: number
   global_rpm: number
-  ip_concurrency_limit: number
+  ip_qps_limit: number
   ip_rpm_limit: number
+  ip_blacklist: string
   test_model: string
   test_concurrency: number
   background_refresh_interval_minutes: number
@@ -350,6 +385,7 @@ export interface SystemSettings {
   stream_flush_policy: 'immediate' | 'coalesce' | string
   stream_flush_interval_ms: number
   filter_local_fallback_response: boolean
+  api_key_disabled_message: string
   api_maintenance_enabled: boolean
   api_maintenance_message: string
   api_maintenance_sse_randomize: boolean
@@ -568,6 +604,7 @@ export interface UsageLog {
   api_key_id: number
   api_key_name: string
   api_key_masked: string
+  client_ip: string
   image_count: number
   image_width: number
   image_height: number
@@ -641,7 +678,8 @@ export interface APIKeyRow {
   quota_limit: number
   quota_used: number
   expires_at?: ISODateString | null
-  status?: 'active' | 'expired' | 'quota_exhausted'
+  disabled?: boolean
+  status?: 'active' | 'expired' | 'quota_exhausted' | 'disabled'
   allowed_group_ids?: number[]
   created_at: ISODateString
 }
@@ -656,6 +694,7 @@ export interface CreateAPIKeyRequest {
   expires_at?: string
   expires_in_days?: number
   allowed_group_ids?: number[]
+  disabled?: boolean
 }
 
 export interface UpdateAPIKeyRequest {
@@ -665,6 +704,7 @@ export interface UpdateAPIKeyRequest {
   expires_at?: string | null
   expires_in_days?: number
   allowed_group_ids?: number[]
+  disabled?: boolean
 }
 
 export interface CreateAPIKeyResponse {
@@ -675,6 +715,7 @@ export interface CreateAPIKeyResponse {
   quota_used: number
   expires_at?: ISODateString | null
   allowed_group_ids?: number[]
+  disabled?: boolean
 }
 
 export interface ImagePromptTemplate {

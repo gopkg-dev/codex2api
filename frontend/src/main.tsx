@@ -13,7 +13,7 @@ if (!rootElement) {
 
 ReactDOM.createRoot(rootElement).render(
   <StrictMode>
-    <BrowserRouter basename="/admin">
+    <BrowserRouter basename={window.location.pathname.startsWith('/admin') ? '/admin' : '/'}>
       <App />
     </BrowserRouter>
   </StrictMode>,

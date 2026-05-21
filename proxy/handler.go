@@ -512,6 +512,9 @@ func populateAPIKeyMetaFromContext(c *gin.Context, input *database.UsageLogInput
 
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
 	populateAPIKeyMetaFromContext(c, input)
+	if c != nil && input != nil && input.ClientIP == "" {
+		input.ClientIP = c.ClientIP()
+	}
 	h.logUsage(input)
 }
 
@@ -965,6 +968,17 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			security.SecurityAuditLog("AUTH_FAILED", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
 			// Use standardized error format from api package
 			api.SendError(c, api.ErrInvalidAPIKey)
+			c.Abort()
+			return
+		}
+		if apiKeyRow.IsDisabled() {
+			maskedKey := security.MaskAPIKey(key)
+			security.SecurityAuditLog("AUTH_FAILED_DISABLED_KEY", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
+			if writeDisabledAPIKeyProtocolResponse(c, CurrentRuntimeSettings()) {
+				c.Abort()
+				return
+			}
+			api.SendError(c, api.NewAPIError(api.ErrCodeDisabledAPIKey, CurrentRuntimeSettings().APIKeyDisabledMessage, api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
