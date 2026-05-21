@@ -28,7 +28,7 @@ import type { ChartAggregation, PublicHomeResponse, UsageModelStat } from '../ty
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
-const PUBLIC_REFRESH_INTERVAL_MS = 15_000
+const PUBLIC_REFRESH_INTERVAL_SECONDS = 5
 const PUBLIC_TIME_RANGES: TimeRangeKey[] = ['1h', '6h', '24h', '7d']
 const QQ_GROUP_NUMBER = '1054851130'
 const QQ_GROUP_URL = 'https://qm.qq.com/q/PphhfxKPee'
@@ -40,21 +40,26 @@ export default function PublicHome() {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('1h')
   const [loading, setLoading] = useState(true)
   const [chartLoading, setChartLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshCountdown, setRefreshCountdown] = useState(PUBLIC_REFRESH_INTERVAL_SECONDS)
   const [error, setError] = useState('')
   const [copiedTarget, setCopiedTarget] = useState('')
   const chartAbort = useRef<AbortController | null>(null)
   const copyResetTimer = useRef<number | null>(null)
+  const refreshInFlight = useRef(false)
 
   const loadOverview = useCallback(async () => {
     const res = await api.getPublicHome()
     setOverview(res)
   }, [])
 
-  const loadChart = useCallback(async () => {
+  const loadChart = useCallback(async (options?: { background?: boolean }) => {
     chartAbort.current?.abort()
     const controller = new AbortController()
     chartAbort.current = controller
-    setChartLoading(true)
+    if (!options?.background) {
+      setChartLoading(true)
+    }
     try {
       const { start, end } = getTimeRangeISO(timeRange)
       const { bucketMinutes } = getBucketConfig(timeRange)
@@ -69,14 +74,20 @@ export default function PublicHome() {
     }
   }, [timeRange])
 
-  const reload = useCallback(async () => {
+  const reload = useCallback(async (options?: { background?: boolean }) => {
+    if (refreshInFlight.current) return
+    refreshInFlight.current = true
     setError('')
+    setRefreshing(true)
     try {
-      await Promise.all([loadOverview(), loadChart()])
+      await Promise.all([loadOverview(), loadChart(options)])
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败')
     } finally {
       setLoading(false)
+      setRefreshing(false)
+      setRefreshCountdown(PUBLIC_REFRESH_INTERVAL_SECONDS)
+      refreshInFlight.current = false
     }
   }, [loadChart, loadOverview])
 
@@ -111,19 +122,16 @@ export default function PublicHome() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
-      void (async () => {
-        try {
-          await loadOverview()
-          if (timeRange === '1h') {
-            await loadChart()
-          }
-        } catch (err) {
-          setError(err instanceof Error ? err.message : '加载失败')
+      setRefreshCountdown((current) => {
+        if (current <= 1) {
+          void reload({ background: true })
+          return PUBLIC_REFRESH_INTERVAL_SECONDS
         }
-      })()
-    }, PUBLIC_REFRESH_INTERVAL_MS)
+        return current - 1
+      })
+    }, 1000)
     return () => window.clearInterval(timer)
-  }, [loadChart, loadOverview, timeRange])
+  }, [reload])
 
   const chartPoints = useMemo(() => {
     if (!chartData) return []
@@ -146,6 +154,7 @@ export default function PublicHome() {
   const maintenance = overview?.maintenance
   const latestKey = overview?.latest_key?.trim() ?? ''
   const modelStats = usage?.model_stats ?? []
+  const publicApiBase = window.location.origin
 
   return (
     <main className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-6 lg:px-8">
@@ -158,7 +167,7 @@ export default function PublicHome() {
             </div>
             <h1 className="text-2xl font-bold tracking-normal text-foreground sm:text-3xl">{siteName}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Codex 公益站实时状态，Key 定时更新，旧 Key 自动失效
+              公益站实时状态，永久免费, 定时轮换Key，旧Key自动失效。
             </p>
           </div>
           <div className="flex min-w-0 flex-col items-start gap-2 sm:items-end">
@@ -178,22 +187,42 @@ export default function PublicHome() {
                 onClick={() => void copyText(QQ_GROUP_NUMBER, 'qq')}
               />
               <StatusPill enabled={Boolean(maintenance?.enabled)} />
-              <Button type="button" variant="outline" size="sm" onClick={() => void reload()} disabled={loading}>
-                <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
+              <div className="inline-flex h-8 items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                <RefreshCw className={`size-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+                5s 自动刷新
+                <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-xs tabular-nums">
+                  {refreshCountdown}s
+                </span>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => void reload()} disabled={loading || refreshing}>
+                <RefreshCw className={`size-4 ${loading || refreshing ? 'animate-spin' : ''}`} />
                 刷新
               </Button>
             </div>
-            <div className="flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-sm">
-              <span className="shrink-0 font-semibold text-muted-foreground">最新密钥</span>
-              <span className="min-w-0 max-w-[min(68vw,420px)] truncate font-mono text-xs font-semibold tabular-nums text-foreground" title={latestKey}>
-                {latestKey || '-'}
-              </span>
-              <CopyIconButton
-                label="复制最新密钥"
-                copied={copiedTarget === 'latest_key'}
-                disabled={!latestKey}
-                onClick={() => void copyText(latestKey, 'latest_key')}
-              />
+            <div className="flex max-w-full flex-wrap items-center gap-2 sm:justify-end">
+              <div className="flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-sm">
+                <span className="shrink-0 font-semibold text-muted-foreground">API 地址</span>
+                <span className="min-w-0 max-w-[min(50vw,260px)] truncate font-mono text-xs font-semibold tabular-nums text-foreground" title={publicApiBase}>
+                  {publicApiBase}
+                </span>
+                <CopyIconButton
+                  label="复制 API 地址"
+                  copied={copiedTarget === 'api_base'}
+                  onClick={() => void copyText(publicApiBase, 'api_base')}
+                />
+              </div>
+              <div className="flex max-w-full items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5 text-sm">
+                <span className="shrink-0 font-semibold text-muted-foreground">最新密钥</span>
+                <span className="min-w-0 max-w-[min(50vw,320px)] truncate font-mono text-xs font-semibold tabular-nums text-foreground" title={latestKey}>
+                  {latestKey || '-'}
+                </span>
+                <CopyIconButton
+                  label="复制最新密钥"
+                  copied={copiedTarget === 'latest_key'}
+                  disabled={!latestKey}
+                  onClick={() => void copyText(latestKey, 'latest_key')}
+                />
+              </div>
             </div>
           </div>
         </header>
@@ -214,7 +243,7 @@ export default function PublicHome() {
             loading={loading}
             metrics={[
               { label: '总请求数', value: formatInteger(usage?.total_requests) },
-              { label: '总 Token 数', value: formatInteger(usage?.total_tokens) },
+              { label: '总 Token 数', value: formatCompactNumber(usage?.total_tokens) },
               { label: '总计费', value: formatMoneyFixed2(usage?.total_user_billed) },
               { label: '今日请求数', value: formatInteger(usage?.today_requests) },
             ]}
@@ -240,7 +269,7 @@ export default function PublicHome() {
               { label: 'CPU', value: `${formatDecimal(ops?.cpu.percent, 1)}%`, sub: `${ops?.cpu.cores ?? 0} cores` },
               { label: '内存', value: `${formatDecimal(ops?.memory.percent, 1)}%`, sub: `${formatBytes(ops?.memory.used_bytes)} / ${formatBytes(ops?.memory.total_bytes)}` },
               { label: '协程', value: formatInteger(ops?.runtime.goroutines), sub: `${formatInteger(ops?.requests.active)} active` },
-              { label: '网络', value: formatBytes(ops?.network.total_bytes), sub: `RX ${formatBytes(ops?.network.rx_bytes)} / TX ${formatBytes(ops?.network.tx_bytes)}` },
+              { label: '网络', value: formatBytes(ops?.network.total_bytes), sub: `RX ${formatBytesCompact(ops?.network.rx_bytes)} TX ${formatBytesCompact(ops?.network.tx_bytes)}` },
             ]}
           />
           <SummaryDashboardCard
@@ -253,15 +282,15 @@ export default function PublicHome() {
               { label: '总命中率', value: formatPercent(usage?.total_cache_rate) },
               { label: '首 Token', value: formatLatency(usage?.avg_first_token_ms) },
               { label: '完成延迟', value: formatLatency(usage?.avg_duration_ms) },
-              { label: '今日缓存 Token', value: formatInteger(usage?.today_cached_tokens) },
+              { label: '今日缓存 Token', value: formatCompactNumber(usage?.today_cached_tokens) },
               { label: '错误率', value: formatPercent(usage?.error_rate) },
             ]}
           />
         </section>
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-          <Card className="py-0">
-            <CardContent className="p-4 sm:p-5">
+          <Card className="h-[420px] py-0">
+            <CardContent className="flex h-full min-h-0 flex-col p-4 sm:p-5">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <h2 className="text-base font-semibold text-foreground">QPS / RPM / TPM 趋势</h2>
@@ -282,7 +311,7 @@ export default function PublicHome() {
                   ))}
                 </div>
               </div>
-              <div className="h-[320px]">
+              <div className="min-h-0 flex-1">
                 {chartLoading ? (
                   <ChartSkeleton />
                 ) : chartPoints.length > 0 ? (
@@ -508,21 +537,21 @@ function MaintenanceStatusCard({
 function ModelStatsCard({ stats, loading }: { stats: UsageModelStat[]; loading: boolean }) {
   const maxRequests = Math.max(1, ...stats.map((item) => item.requests))
   return (
-    <Card className="py-0">
-      <CardContent className="p-4 sm:p-5">
+    <Card className="h-[420px] py-0">
+      <CardContent className="flex h-full min-h-0 flex-col p-4 sm:p-5">
         <div className="mb-4">
           <h2 className="text-base font-semibold text-foreground">模型统计</h2>
           <p className="mt-1 text-sm text-muted-foreground">按请求量和计费聚合</p>
         </div>
         {loading ? (
-          <div className="space-y-3">
+          <div className="min-h-0 flex-1 space-y-3 overflow-hidden">
             {[0, 1, 2, 3].map((i) => (
               <div key={i} className="h-12 animate-pulse rounded-lg bg-muted" />
             ))}
           </div>
         ) : stats.length > 0 ? (
-          <div className="space-y-3">
-            {stats.slice(0, 8).map((item) => (
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+            {stats.map((item) => (
               <div key={item.model} className="rounded-lg border border-border/70 bg-muted/20 p-3">
                 <div className="mb-2 flex min-w-0 items-center justify-between gap-3">
                   <span className="truncate text-sm font-semibold text-foreground" title={item.model}>{item.model}</span>
@@ -533,13 +562,13 @@ function ModelStatsCard({ stats, loading }: { stats: UsageModelStat[]; loading: 
                 </div>
                 <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
                   <span>{formatInteger(item.requests)} requests</span>
-                  <span>{formatInteger(item.tokens)} tokens</span>
+                  <span>{formatCompactNumber(item.tokens)} tokens</span>
                 </div>
               </div>
             ))}
           </div>
         ) : (
-          <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
+          <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
             暂无模型统计
           </div>
         )}
@@ -571,6 +600,21 @@ function formatChartLabel(date: Date, range: TimeRangeKey): string {
 
 function formatInteger(value?: number | null): string {
   return Math.round(value ?? 0).toLocaleString()
+}
+
+function formatCompactNumber(value?: number | null): string {
+  const amount = Math.round(value ?? 0)
+  const abs = Math.abs(amount)
+  const units = [
+    { value: 1_000_000_000, suffix: 'B' },
+    { value: 1_000_000, suffix: 'M' },
+    { value: 1_000, suffix: 'K' },
+  ]
+  const unit = units.find((item) => abs >= item.value)
+  if (!unit) return amount.toLocaleString()
+  const compact = amount / unit.value
+  const digits = Math.abs(compact) >= 100 ? 0 : 1
+  return `${compact.toFixed(digits).replace(/\.0$/, '')}${unit.suffix}`
 }
 
 function formatDecimal(value?: number | null, digits = 2): string {
@@ -611,6 +655,20 @@ function formatBytes(bytes?: number | null): string {
     index += 1
   }
   return `${size.toFixed(size >= 10 ? 1 : 2)} ${units[index]}`
+}
+
+function formatBytesCompact(bytes?: number | null): string {
+  const value = bytes ?? 0
+  if (value < 1024) return `${value}B`
+  const units = ['K', 'M', 'G', 'T']
+  let size = value / 1024
+  let index = 0
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+  const digits = size >= 100 ? 0 : size >= 10 ? 1 : 2
+  return `${size.toFixed(digits).replace(/\.0+$/, '')}${units[index]}`
 }
 
 function round(value: number, digits: number): number {

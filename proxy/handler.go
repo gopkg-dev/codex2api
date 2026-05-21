@@ -3176,9 +3176,13 @@ func parseFloat(s string) float64 {
 
 // sendUpstreamError 发送上游错误响应给客户端
 func (h *Handler) sendUpstreamError(c *gin.Context, statusCode int, body []byte) {
+	message := fmt.Sprintf("上游返回错误 (status %d): %s", statusCode, string(body))
+	if CurrentRuntimeSettings().FilterLocalFallbackResponse {
+		message = fmt.Sprintf("上游返回错误 (status %d)", statusCode)
+	}
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
-			"message": fmt.Sprintf("上游返回错误 (status %d): %s", statusCode, string(body)),
+			"message": message,
 			"type":    "upstream_error",
 			"code":    fmt.Sprintf("upstream_%d", statusCode),
 		},

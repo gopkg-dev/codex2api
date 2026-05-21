@@ -695,6 +695,48 @@ func TestSendFinalUpstreamError_FallsBackForNonUsageLimit(t *testing.T) {
 	}
 }
 
+func TestSendFinalUpstreamError_HidesUpstreamBodyWhenLocalFallbackFilterEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{FilterLocalFallbackResponse: true})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	handler := &Handler{}
+	body := []byte(`{"error":{"message":"切换key需要冷却30秒","type":"invalid_request_error","code":"key_switch_cooldown"},"message":"切换key需要冷却30秒","code":"key_switch_cooldown","limit_type":"key_switch_cooldown"}`)
+
+	handler.sendFinalUpstreamError(ctx, http.StatusBadRequest, body)
+
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+	response := recorder.Body.String()
+	for _, leaked := range []string{"切换key需要冷却30秒", "key_switch_cooldown"} {
+		if strings.Contains(response, leaked) {
+			t.Fatalf("response leaked upstream detail %q: %s", leaked, response)
+		}
+	}
+
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Error.Message != "上游返回错误 (status 400)" {
+		t.Fatalf("message = %q, want sanitized upstream status", payload.Error.Message)
+	}
+	if payload.Error.Type != "upstream_error" || payload.Error.Code != "upstream_400" {
+		t.Fatalf("error = %#v, want upstream_400", payload.Error)
+	}
+}
+
 func TestSendFinalUpstreamError_UsageLimitMissingTimeFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
