@@ -373,11 +373,12 @@ func writeMaintenanceChatStream(c *gin.Context, model string, cfg maintenanceRes
 	c.Header("Connection", "keep-alive")
 	id := maintenanceHexID("chatcmpl_")
 	created := time.Now().Unix()
+	usage := newMaintenanceUsage()
 	writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{"role": "assistant"}, "finish_reason": nil}}})
 	for _, segment := range maintenanceStreamSegments(cfg.Message, cfg.SSERandomize) {
 		writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{"content": segment}, "finish_reason": nil}}})
 	}
-	writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{}, "finish_reason": "stop"}}})
+	writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{}, "finish_reason": "stop"}}, "usage": usage.chat()})
 	fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 	flushGin(c)
 }
@@ -390,7 +391,8 @@ func writeMaintenanceResponsesStream(c *gin.Context, model string, cfg maintenan
 	itemID := maintenanceHexID("msg_")
 	created := time.Now().Unix()
 	sequenceNumber := 0
-	inProgress := buildMaintenanceStreamResponseObject(responseID, model, created, "in_progress", nil)
+	usage := newMaintenanceUsage()
+	inProgress := buildMaintenanceStreamResponseObject(responseID, model, created, "in_progress", nil, nil)
 	writeNamedSSE(c, "response.created", gin.H{"type": "response.created", "response": inProgress, "sequence_number": sequenceNumber})
 	sequenceNumber++
 	writeNamedSSE(c, "response.in_progress", gin.H{"type": "response.in_progress", "response": inProgress, "sequence_number": sequenceNumber})
@@ -451,7 +453,7 @@ func writeMaintenanceResponsesStream(c *gin.Context, model string, cfg maintenan
 	sequenceNumber++
 	writeNamedSSE(c, "response.completed", gin.H{
 		"type":            "response.completed",
-		"response":        buildMaintenanceStreamResponseObject(responseID, model, created, "completed", []gin.H{}),
+		"response":        buildMaintenanceStreamResponseObject(responseID, model, created, "completed", []gin.H{}, &usage),
 		"sequence_number": sequenceNumber,
 	})
 	flushGin(c)
@@ -462,13 +464,14 @@ func writeMaintenanceMessagesStream(c *gin.Context, model string, cfg maintenanc
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	messageID := maintenanceHexID("msg_")
-	writeNamedSSE(c, "message_start", gin.H{"type": "message_start", "message": gin.H{"id": messageID, "type": "message", "role": "assistant", "model": model, "content": []any{}, "stop_reason": nil, "usage": gin.H{"input_tokens": 0, "output_tokens": 0}}})
+	usage := newMaintenanceUsage()
+	writeNamedSSE(c, "message_start", gin.H{"type": "message_start", "message": gin.H{"id": messageID, "type": "message", "role": "assistant", "model": model, "content": []any{}, "stop_reason": nil, "usage": usage.messagesStart()}})
 	writeNamedSSE(c, "content_block_start", gin.H{"type": "content_block_start", "index": 0, "content_block": gin.H{"type": "text", "text": ""}})
 	for _, segment := range maintenanceStreamSegments(cfg.Message, cfg.SSERandomize) {
 		writeNamedSSE(c, "content_block_delta", gin.H{"type": "content_block_delta", "index": 0, "delta": gin.H{"type": "text_delta", "text": segment}})
 	}
 	writeNamedSSE(c, "content_block_stop", gin.H{"type": "content_block_stop", "index": 0})
-	writeNamedSSE(c, "message_delta", gin.H{"type": "message_delta", "delta": gin.H{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": gin.H{"output_tokens": 0}})
+	writeNamedSSE(c, "message_delta", gin.H{"type": "message_delta", "delta": gin.H{"stop_reason": "end_turn", "stop_sequence": nil}, "usage": usage.messagesDelta()})
 	writeNamedSSE(c, "message_stop", gin.H{"type": "message_stop"})
 	flushGin(c)
 }
@@ -499,7 +502,7 @@ func maintenanceHexID(prefix string) string {
 	return prefix + hex.EncodeToString(raw[:])
 }
 
-func buildMaintenanceStreamResponseObject(responseID, model string, created int64, status string, output []gin.H) gin.H {
+func buildMaintenanceStreamResponseObject(responseID, model string, created int64, status string, output []gin.H, usage *maintenanceUsage) gin.H {
 	var completedAt any
 	serviceTier := "auto"
 	if status == "completed" {
@@ -545,26 +548,82 @@ func buildMaintenanceStreamResponseObject(responseID, model string, created int6
 		"top_logprobs": 0,
 		"top_p":        1.0,
 		"truncation":   "disabled",
-		"usage":        maintenanceStreamUsage(status),
+		"usage":        maintenanceStreamUsage(status, usage),
 		"user":         nil,
 		"metadata":     gin.H{},
 	}
 }
 
-func maintenanceStreamUsage(status string) any {
+type maintenanceUsage struct {
+	input     int
+	cached    int
+	output    int
+	reasoning int
+}
+
+func newMaintenanceUsage() maintenanceUsage {
+	return maintenanceUsageWithRand(newMaintenanceRand())
+}
+
+func maintenanceUsageWithRand(rng *mrand.Rand) maintenanceUsage {
+	if rng == nil {
+		rng = newMaintenanceRand()
+	}
+	input := 80000 + rng.Intn(120001)
+	output := 20000 + rng.Intn(60001)
+	cached := 10000 + rng.Intn(max(1, input/2-9999))
+	reasoning := 2000 + rng.Intn(max(1, output/2-1999))
+	return maintenanceUsage{
+		input:     input,
+		cached:    min(cached, input),
+		output:    output,
+		reasoning: min(reasoning, output),
+	}
+}
+
+func (u maintenanceUsage) total() int {
+	return u.input + u.output
+}
+
+func (u maintenanceUsage) chat() gin.H {
+	return gin.H{
+		"prompt_tokens":     u.input,
+		"completion_tokens": u.output,
+		"total_tokens":      u.total(),
+	}
+}
+
+func (u maintenanceUsage) messagesStart() gin.H {
+	return gin.H{
+		"input_tokens":  u.input,
+		"output_tokens": 0,
+	}
+}
+
+func (u maintenanceUsage) messagesDelta() gin.H {
+	return gin.H{
+		"output_tokens": u.output,
+	}
+}
+
+func maintenanceStreamUsage(status string, usage *maintenanceUsage) any {
 	if status != "completed" {
 		return nil
 	}
+	if usage == nil {
+		generated := newMaintenanceUsage()
+		usage = &generated
+	}
 	return gin.H{
-		"input_tokens": 0,
+		"input_tokens": usage.input,
 		"input_tokens_details": gin.H{
-			"cached_tokens": 0,
+			"cached_tokens": usage.cached,
 		},
-		"output_tokens": 0,
+		"output_tokens": usage.output,
 		"output_tokens_details": gin.H{
-			"reasoning_tokens": 0,
+			"reasoning_tokens": usage.reasoning,
 		},
-		"total_tokens": 0,
+		"total_tokens": usage.total(),
 	}
 }
 

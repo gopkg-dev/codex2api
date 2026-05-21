@@ -139,6 +139,46 @@ func TestMaintenanceResponsesStreamMatchesResponsesEventShape(t *testing.T) {
 	}
 }
 
+func TestMaintenanceSSEUsesLargeRandomUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Enabled: true,
+			Message: "系统维护中",
+		},
+	})
+	defer ApplyRuntimeSettings(DefaultRuntimeSettings())
+
+	router := gin.New()
+	router.POST("/v1/chat/completions", MaintenanceMiddleware(), func(c *gin.Context) {
+		t.Fatal("chat handler should be short-circuited by maintenance middleware")
+	})
+	router.POST("/v1/responses", MaintenanceMiddleware(), func(c *gin.Context) {
+		t.Fatal("responses handler should be short-circuited by maintenance middleware")
+	})
+	router.POST("/v1/messages", MaintenanceMiddleware(), func(c *gin.Context) {
+		t.Fatal("messages handler should be short-circuited by maintenance middleware")
+	})
+
+	chatEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/chat/completions"))
+	chatUsage := gjson.Get(lastJSONDataEvent(t, chatEvents), "usage")
+	assertLargeMaintenanceUsage(t, chatUsage, "prompt_tokens", "completion_tokens", "total_tokens")
+
+	responseEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/responses"))
+	responseUsage := gjson.Get(responseEvents[len(responseEvents)-1], "response.usage")
+	assertLargeMaintenanceUsage(t, responseUsage, "input_tokens", "output_tokens", "total_tokens")
+
+	messageEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/messages"))
+	messageStartUsage := gjson.Get(messageEvents[0], "message.usage")
+	if input := messageStartUsage.Get("input_tokens").Int(); input < 80000 {
+		t.Fatalf("messages input_tokens = %d, want large random usage", input)
+	}
+	messageDeltaUsage := gjson.Get(messageEvents[len(messageEvents)-2], "usage")
+	if output := messageDeltaUsage.Get("output_tokens").Int(); output < 20000 {
+		t.Fatalf("messages output_tokens = %d, want large random usage", output)
+	}
+}
+
 func TestMaintenanceMiddlewareRouteOverrideDisablesMaintenance(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	disabled := false
@@ -364,6 +404,33 @@ func containsAnyString(s string, values []string) bool {
 		}
 	}
 	return false
+}
+
+func assertLargeMaintenanceUsage(t *testing.T, usage gjson.Result, inputKey, outputKey, totalKey string) {
+	t.Helper()
+	input := usage.Get(inputKey).Int()
+	output := usage.Get(outputKey).Int()
+	total := usage.Get(totalKey).Int()
+	if input < 80000 {
+		t.Fatalf("%s = %d, want large random usage; usage=%s", inputKey, input, usage.Raw)
+	}
+	if output < 20000 {
+		t.Fatalf("%s = %d, want large random usage; usage=%s", outputKey, output, usage.Raw)
+	}
+	if total != input+output {
+		t.Fatalf("%s = %d, want input+output %d; usage=%s", totalKey, total, input+output, usage.Raw)
+	}
+}
+
+func lastJSONDataEvent(t *testing.T, events []string) string {
+	t.Helper()
+	for i := len(events) - 1; i >= 0; i-- {
+		if gjson.Valid(events[i]) {
+			return events[i]
+		}
+	}
+	t.Fatalf("no JSON data event in %v", events)
+	return ""
 }
 
 func parseSSEDataEvents(t *testing.T, body string) []string {
