@@ -985,6 +985,10 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		if apiKeyRow.IsExpired(time.Now()) {
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED_EXPIRED_KEY", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
+			if writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙已过期", CurrentRuntimeSettings().APIKeyDisabledMessage), CurrentRuntimeSettings()) {
+				c.Abort()
+				return
+			}
 			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAuth, "API key has expired", api.ErrorTypeAuthentication))
 			c.Abort()
 			return

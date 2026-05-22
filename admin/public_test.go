@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
@@ -111,6 +113,69 @@ func TestPublicHomeOverviewIsRegisteredWithoutAdminAuth(t *testing.T) {
 	}
 	if payload.Ops.Traffic.RPMLimit != 120 {
 		t.Fatalf("rpm_limit = %d, want 120", payload.Ops.Traffic.RPMLimit)
+	}
+	if len(payload.AccountPool.Plans) == 0 {
+		t.Fatal("account_pool.plans = empty, want plan buckets")
+	}
+}
+
+func TestBuildPublicAccountPoolBucketsPlansAndRateLimits(t *testing.T) {
+	now := time.Now()
+	accounts := []*auth.Account{
+		{DBID: 1, AccessToken: "tok-pro", PlanType: "pro", Status: auth.StatusReady},
+		{DBID: 2, AccessToken: "tok-lite", PlanType: "prolite", Status: auth.StatusReady},
+		{DBID: 3, AccessToken: "tok-plus", PlanType: "plus", Status: auth.StatusCooldown, CooldownReason: "rate_limited", CooldownUtil: now.Add(time.Hour)},
+		{DBID: 4, AccessToken: "tok-team", PlanType: "team", Status: auth.StatusReady, UsagePercent5h: 100, UsagePercent5hValid: true, Reset5hAt: now.Add(time.Hour)},
+		{DBID: 5, AccessToken: "tok-free", PlanType: "free", Status: auth.StatusReady, UsagePercent7d: 100, UsagePercent7dValid: true, Reset7dAt: now.Add(time.Hour)},
+		{DBID: 6, AccessToken: "tok-pro-7d", PlanType: "pro", Status: auth.StatusCooldown, CooldownReason: "rate_limited_7d", CooldownUtil: now.Add(time.Hour)},
+		{DBID: 7, PlanType: "free", Status: auth.StatusError},
+	}
+	atomic.StoreInt32(&accounts[1].Disabled, 1)
+
+	stats := buildPublicAccountPool(accounts)
+	if stats.Total != 7 {
+		t.Fatalf("total = %d, want 7", stats.Total)
+	}
+	if stats.Available != 1 {
+		t.Fatalf("available = %d, want 1", stats.Available)
+	}
+	if stats.RateLimited != 4 || stats.RateLimited5h != 2 || stats.RateLimited7d != 2 {
+		t.Fatalf("rate limited = %d/%d/%d, want total=4 5h=2 7d=2", stats.RateLimited, stats.RateLimited5h, stats.RateLimited7d)
+	}
+	if stats.Disabled != 1 || stats.Error != 1 {
+		t.Fatalf("disabled/error = %d/%d, want 1/1", stats.Disabled, stats.Error)
+	}
+
+	plans := map[string]publicAccountPlanResponse{}
+	for _, plan := range stats.Plans {
+		plans[plan.Type] = plan
+	}
+	for _, planType := range []string{"pro", "prolite", "plus", "team", "free", "api"} {
+		if _, ok := plans[planType]; !ok {
+			t.Fatalf("missing plan bucket %s in %#v", planType, stats.Plans)
+		}
+	}
+	if plans["prolite"].Total != 1 {
+		t.Fatalf("prolite total = %d, want 1", plans["prolite"].Total)
+	}
+	if plans["free"].RateLimited != 1 {
+		t.Fatalf("free rate_limited = %d, want 1", plans["free"].RateLimited)
+	}
+}
+
+func TestBuildPublicMaintenanceRoutesReturnsAvailableRoutesWhenDisabled(t *testing.T) {
+	routes := buildPublicMaintenanceRoutes(proxy.DefaultAPIMaintenanceConfig())
+
+	if len(routes) != len(publicMaintenancePaths) {
+		t.Fatalf("routes len = %d, want %d", len(routes), len(publicMaintenancePaths))
+	}
+	for _, route := range routes {
+		if route.Maintenance {
+			t.Fatalf("route %s marked maintenance while maintenance disabled", route.Path)
+		}
+		if route.Message != "" {
+			t.Fatalf("route %s message = %q, want empty", route.Path, route.Message)
+		}
 	}
 }
 

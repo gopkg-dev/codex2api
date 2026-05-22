@@ -151,6 +151,51 @@ func TestAuthMiddlewareRejectsDisabledAPIKeyWithConfiguredMessage(t *testing.T) 
 	}
 }
 
+func TestAuthMiddlewareDisabledAPIKeyUsesProtocolJSONResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIKeyDisabledMessage: "联系管理员处理",
+		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-disabled-json-1234567890"
+	if _, err := db.InsertAPIKeyWithOptions(context.Background(), database.APIKeyInput{
+		Name:     "Disabled JSON Client",
+		Key:      key,
+		Disabled: true,
+	}); err != nil {
+		t.Fatalf("InsertAPIKeyWithOptions 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.POST("/v1/responses", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "密匙已被禁用，联系管理员处理") || !strings.Contains(body, `"status":"completed"`) {
+		t.Fatalf("body = %s, want protocol JSON disabled message", body)
+	}
+}
+
 func TestAuthMiddlewareDisabledAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
@@ -194,8 +239,56 @@ func TestAuthMiddlewareDisabledAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "这个 API Key 已暂停使用") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已被禁用，这个 API Key 已暂停使用") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body missing expected disabled-key chunks: %s", body)
+	}
+}
+
+func TestAuthMiddlewareExpiredAPIKeyUsesProtocolStreamResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIKeyDisabledMessage: "联系管理员处理",
+		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-expired-stream-1234567890"
+	if _, err := db.InsertAPIKeyWithOptions(context.Background(), database.APIKeyInput{
+		Name:      "Expired Stream Client",
+		Key:       key,
+		ExpiresAt: sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true},
+	}); err != nil {
+		t.Fatalf("InsertAPIKeyWithOptions 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.POST("/v1/chat/completions", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已过期，联系管理员处理") || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("stream body missing expected expired-key chunks: %s", body)
 	}
 }
 

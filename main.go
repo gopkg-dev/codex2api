@@ -71,7 +71,9 @@ func main() {
 			GlobalRPM:                        0,
 			IPQPSLimit:                       0,
 			IPRPMLimit:                       0,
-			IPBlacklist:                      "",
+			IPAutoBanDurationMinutes:         30,
+			IPAutoBanOnQPS:                   true,
+			IPAutoBanOnRPM:                   true,
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -110,7 +112,9 @@ func main() {
 			GlobalRPM:                        0,
 			IPQPSLimit:                       0,
 			IPRPMLimit:                       0,
-			IPBlacklist:                      "",
+			IPAutoBanDurationMinutes:         30,
+			IPAutoBanOnQPS:                   true,
+			IPAutoBanOnRPM:                   true,
 			TestModel:                        "gpt-5.4",
 			TestConcurrency:                  50,
 			MaxRateLimitRetries:              1,
@@ -228,7 +232,36 @@ func main() {
 	rateLimiter := proxy.NewRateLimiter(settings.GlobalRPM)
 	rateLimiter.UpdateIPQPSLimit(settings.IPQPSLimit)
 	rateLimiter.UpdateIPRPMLimit(settings.IPRPMLimit)
-	rateLimiter.UpdateIPBlacklist(settings.IPBlacklist)
+	rateLimiter.UpdateIPAutoBanConfig(proxy.IPAutoBanConfig{
+		Enabled:  settings.IPAutoBanEnabled,
+		Duration: time.Duration(settings.IPAutoBanDurationMinutes) * time.Minute,
+		BanOnQPS: settings.IPAutoBanOnQPS,
+		BanOnRPM: settings.IPAutoBanOnRPM,
+	})
+	if bans, err := db.ListIPBans(context.Background(), false); err == nil {
+		rules := make([]proxy.IPBanRule, 0, len(bans))
+		for _, ban := range bans {
+			expiresAt := time.Time{}
+			if ban.ExpiresAt.Valid {
+				expiresAt = ban.ExpiresAt.Time
+			}
+			rules = append(rules, proxy.IPBanRule{
+				IP:        ban.IP,
+				Reason:    ban.Reason,
+				Source:    ban.Source,
+				ExpiresAt: expiresAt,
+				Enabled:   ban.Enabled && !ban.UnbannedAt.Valid,
+			})
+		}
+		rateLimiter.UpdateIPBanRules(rules)
+	}
+	rateLimiter.SetIPAutoBanCallback(func(ip string, reason string, expiresAt time.Time) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, err := db.RecordAutoIPBan(ctx, ip, reason, expiresAt); err != nil {
+			log.Printf("自动封禁 IP 失败: ip=%s reason=%s err=%v", ip, reason, err)
+		}
+	})
 	adminHandler := admin.NewHandler(store, db, tc, rateLimiter, cfg.AdminSecret)
 	// 初始化 admin handler 的连接池设置跟踪
 	adminHandler.SetPoolSizes(settings.PgMaxConns, settings.RedisPoolSize)
@@ -276,8 +309,8 @@ func main() {
 	if settings.IPRPMLimit > 0 {
 		log.Printf("IP RPM 限制已生效: %d", settings.IPRPMLimit)
 	}
-	if strings.TrimSpace(settings.IPBlacklist) != "" {
-		log.Printf("IP 黑名单已生效")
+	if settings.IPAutoBanEnabled {
+		log.Printf("IP 自动封禁已生效: %d 分钟", settings.IPAutoBanDurationMinutes)
 	}
 	log.Printf("单账号并发上限: %d", settings.MaxConcurrency)
 

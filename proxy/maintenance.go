@@ -284,6 +284,10 @@ func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bo
 }
 
 func writeDisabledAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
+	return writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙已被禁用", settings.APIKeyDisabledMessage), settings)
+}
+
+func writeProtocolMessageResponse(c *gin.Context, message string, settings RuntimeSettings) bool {
 	routePath := canonicalMaintenancePath(c.Request.URL.Path)
 	if strings.ToUpper(strings.TrimSpace(c.Request.Method)) != http.MethodPost || !isMaintenanceEndpoint(routePath) {
 		return false
@@ -301,11 +305,27 @@ func writeDisabledAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSetting
 	}
 	maintenanceCfg := NormalizeAPIMaintenanceConfig(settings.APIMaintenance)
 	writeMaintenanceResponse(c, routePath, model, stream, maintenanceResolvedConfig{
-		Message:      settings.APIKeyDisabledMessage,
+		Message:      message,
 		SSERandomize: maintenanceCfg.SSERandomize,
 		ImageB64JSON: maintenanceCfg.ImageB64JSON,
 	})
 	return true
+}
+
+func prefixedRuntimeMessage(prefix, message string) string {
+	prefix = strings.TrimSpace(prefix)
+	message = strings.TrimSpace(message)
+	if prefix == "" {
+		return message
+	}
+	if message == "" {
+		return prefix
+	}
+	return prefix + "，" + message
+}
+
+func runtimeMaintenanceMessage(settings RuntimeSettings) string {
+	return NormalizeAPIMaintenanceConfig(settings.APIMaintenance).Message
 }
 
 func buildMaintenanceChatResponse(model, message string) gin.H {

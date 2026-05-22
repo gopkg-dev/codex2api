@@ -274,7 +274,7 @@ export default function Accounts() {
   >("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [planFilter, setPlanFilter] = useState<
-    "all" | "pro" | "prolite" | "plus" | "team" | "free"
+    "all" | "pro" | "prolite" | "plus" | "team" | "free" | "api"
   >("all");
   const [sortKey, setSortKey] = useState<
     "requests" | "usage" | "importTime" | null
@@ -2387,7 +2387,7 @@ export default function Accounts() {
               />
             </div>
             <div className="flex shrink-0 items-center gap-1 rounded-lg border border-border bg-muted/30 p-0.5">
-              {(["all", "pro", "prolite", "plus", "team", "free"] as const).map(
+              {(["all", "pro", "prolite", "plus", "team", "free", "api"] as const).map(
                 (key) => (
                   <button
                     key={key}
@@ -2405,6 +2405,8 @@ export default function Accounts() {
                       ? t("accounts.filterAll")
                       : key === "prolite"
                         ? "ProLite"
+                        : key === "api"
+                          ? "Api"
                         : key.charAt(0).toUpperCase() + key.slice(1)}
                   </button>
                 ),

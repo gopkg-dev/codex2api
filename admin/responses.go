@@ -125,6 +125,7 @@ type opsOverviewResponse struct {
 	Traffic        opsTrafficResponse     `json:"traffic"`
 	Network        opsNetworkResponse     `json:"network"`
 	IPStats        []database.IPUsageStat `json:"ip_stats"`
+	IPStatsTotal   int64                  `json:"ip_stats_total"`
 }
 
 type opsCPUResponse struct {
@@ -194,8 +195,30 @@ type publicHomeResponse struct {
 	UpdatedAt   string                    `json:"updated_at"`
 	Usage       *database.UsageStats      `json:"usage"`
 	Ops         opsOverviewResponse       `json:"ops"`
+	AccountPool publicAccountPoolResponse `json:"account_pool"`
 	Maintenance publicMaintenanceResponse `json:"maintenance"`
 	LatestKey   string                    `json:"latest_key"`
+}
+
+type publicAccountPoolResponse struct {
+	Total         int                         `json:"total"`
+	Available     int                         `json:"available"`
+	RateLimited   int                         `json:"rate_limited"`
+	RateLimited5h int                         `json:"rate_limited_5h"`
+	RateLimited7d int                         `json:"rate_limited_7d"`
+	Error         int                         `json:"error"`
+	Unauthorized  int                         `json:"unauthorized"`
+	Disabled      int                         `json:"disabled"`
+	Refreshing    int                         `json:"refreshing"`
+	Plans         []publicAccountPlanResponse `json:"plans"`
+}
+
+type publicAccountPlanResponse struct {
+	Type        string `json:"type"`
+	Label       string `json:"label"`
+	Total       int    `json:"total"`
+	Available   int    `json:"available"`
+	RateLimited int    `json:"rate_limited"`
 }
 
 type publicMaintenanceResponse struct {

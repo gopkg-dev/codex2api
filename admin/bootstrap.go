@@ -217,6 +217,9 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		GlobalRPM:                        0,
 		IPQPSLimit:                       0,
 		IPRPMLimit:                       0,
+		IPAutoBanDurationMinutes:         30,
+		IPAutoBanOnQPS:                   true,
+		IPAutoBanOnRPM:                   true,
 		TestModel:                        "gpt-5.4",
 		TestConcurrency:                  50,
 		BackgroundRefreshIntervalMinutes: 2,
@@ -240,7 +243,6 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		StreamFlushIntervalMS:            20,
 		ImageStorageConfig:               "{}",
 		FilterLocalFallbackResponse:      true,
-		IPBlacklist:                      "",
 		APIKeyDisabledMessage:            "API Key 已被禁用，请联系管理员。",
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 	}

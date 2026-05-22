@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"math"
 	"path/filepath"
 	"testing"
 	"time"
@@ -287,7 +288,6 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 		ImageStorageConfig:           "{}",
 		IPQPSLimit:                   3,
 		IPRPMLimit:                   7,
-		IPBlacklist:                  "203.0.113.20\n198.51.100.0/24",
 		FilterLocalFallbackResponse:  true,
 		APIMaintenanceConfig:         `{"enabled":true,"message":"维护中"}`,
 	}
@@ -314,9 +314,6 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	}
 	if got.IPRPMLimit != 7 {
 		t.Fatalf("IPRPMLimit = %d, want 7", got.IPRPMLimit)
-	}
-	if got.IPBlacklist != "203.0.113.20\n198.51.100.0/24" {
-		t.Fatalf("IPBlacklist = %q, want configured blacklist", got.IPBlacklist)
 	}
 }
 
@@ -378,6 +375,85 @@ func TestSQLiteMigratesLegacyIPLimitToIPQPSLimit(t *testing.T) {
 	}
 	if _, ok := columns["ip_concurrency_limit"]; ok {
 		t.Fatal("legacy ip_concurrency_limit column still exists after migration")
+	}
+}
+
+func TestSQLiteMigratesLegacyIPBlacklistToIPBansAndDropsColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy sqlite 返回错误: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE system_settings (
+			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			site_name TEXT DEFAULT 'CodexProxy',
+			max_concurrency INTEGER DEFAULT 2,
+			global_rpm INTEGER DEFAULT 0,
+			ip_qps_limit INTEGER DEFAULT 0,
+			ip_rpm_limit INTEGER DEFAULT 0,
+			ip_blacklist TEXT DEFAULT '',
+			test_model TEXT DEFAULT 'gpt-5.4',
+			test_concurrency INTEGER DEFAULT 50
+		);
+		INSERT INTO system_settings (id, ip_blacklist) VALUES (1, '203.0.113.20
+198.51.100.0/24');
+	`)
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatalf("close legacy sqlite 返回错误: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("seed legacy sqlite 返回错误: %v", err)
+	}
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	bans, err := db.ListIPBans(context.Background(), true)
+	if err != nil {
+		t.Fatalf("ListIPBans 返回错误: %v", err)
+	}
+	if len(bans) != 1 {
+		t.Fatalf("len(bans) = %d, want 1: %#v", len(bans), bans)
+	}
+	if bans[0].IP != "203.0.113.20" {
+		t.Fatalf("migrated bans = %#v", bans)
+	}
+	for _, ban := range bans {
+		if ban.Source != "manual" || ban.Reason != "manual" || !ban.Enabled {
+			t.Fatalf("ban metadata = %#v, want manual enabled", ban)
+		}
+	}
+	columns, err := db.sqliteTableColumns(context.Background(), "system_settings")
+	if err != nil {
+		t.Fatalf("sqliteTableColumns 返回错误: %v", err)
+	}
+	if _, ok := columns["ip_blacklist"]; ok {
+		t.Fatal("legacy ip_blacklist column still exists after migration")
+	}
+}
+
+func TestCreateIPBanRejectsCIDR(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.CreateIPBan(context.Background(), IPBanInput{IP: "198.51.100.0/24", Reason: IPBanReasonManual, Source: IPBanSourceManual, Enabled: true}); err == nil {
+		t.Fatal("CreateIPBan(CIDR) error = nil, want error")
+	}
+
+	bans, err := db.ListIPBans(context.Background(), true)
+	if err != nil {
+		t.Fatalf("ListIPBans 返回错误: %v", err)
+	}
+	if len(bans) != 0 {
+		t.Fatalf("len(bans) = %d, want 0: %#v", len(bans), bans)
 	}
 }
 
@@ -1418,29 +1494,33 @@ func TestSQLiteGetIPUsageStatsAggregatesRecentTraffic(t *testing.T) {
 	rows := []struct {
 		ip     string
 		tokens int
+		cost   float64
+		status int
 		at     time.Time
 	}{
-		{ip: "203.0.113.8", tokens: 100, at: now.Add(-5 * time.Second)},
-		{ip: "203.0.113.8", tokens: 200, at: now.Add(-30 * time.Second)},
-		{ip: "198.51.100.2", tokens: 50, at: now.Add(-20 * time.Second)},
-		{ip: "203.0.113.9", tokens: 300, at: now.Add(-10 * time.Minute)},
+		{ip: "203.0.113.8", tokens: 100, cost: 0.01, status: 200, at: now.Add(-5 * time.Second)},
+		{ip: "203.0.113.8", tokens: 200, cost: 0.02, status: 200, at: now.Add(-30 * time.Second)},
+		{ip: "198.51.100.2", tokens: 50, cost: 0.005, status: 200, at: now.Add(-20 * time.Second)},
+		{ip: "203.0.113.9", tokens: 300, cost: 0.03, status: 200, at: now.Add(-10 * time.Minute)},
+		{ip: "", tokens: 20, cost: 0.002, status: 200, at: now.Add(-15 * time.Second)},
+		{ip: "203.0.113.10", tokens: 20, cost: 0.002, status: 499, at: now.Add(-15 * time.Second)},
 	}
 	for _, row := range rows {
 		_, err := db.conn.ExecContext(ctx, `
-			INSERT INTO usage_logs (client_ip, total_tokens, status_code, created_at)
-			VALUES ($1, $2, 200, $3)
-		`, row.ip, row.tokens, sqliteTimeParam(row.at))
+			INSERT INTO usage_logs (client_ip, total_tokens, user_billed, status_code, created_at)
+			VALUES ($1, $2, $3, $4, $5)
+		`, row.ip, row.tokens, row.cost, row.status, sqliteTimeParam(row.at))
 		if err != nil {
 			t.Fatalf("insert usage log 返回错误: %v", err)
 		}
 	}
 
-	stats, err := db.GetIPUsageStats(ctx, 10)
+	stats, err := db.GetIPUsageStats(ctx, 10, now.Add(-5*time.Minute))
 	if err != nil {
 		t.Fatalf("GetIPUsageStats 返回错误: %v", err)
 	}
-	if len(stats) != 2 {
-		t.Fatalf("len(stats) = %d, want 2 (%#v)", len(stats), stats)
+	if len(stats) != 3 {
+		t.Fatalf("len(stats) = %d, want 3 (%#v)", len(stats), stats)
 	}
 	if stats[0].IP != "203.0.113.8" {
 		t.Fatalf("top IP = %q, want 203.0.113.8", stats[0].IP)
@@ -1450,6 +1530,51 @@ func TestSQLiteGetIPUsageStatsAggregatesRecentTraffic(t *testing.T) {
 	}
 	if stats[0].QPS <= 0 || stats[0].RPM != 2 || stats[0].TPM != 300 {
 		t.Fatalf("top stats = %#v, want qps>0 rpm=2 tpm=300", stats[0])
+	}
+	if stats[0].Tokens != 300 {
+		t.Fatalf("tokens = %d, want 300", stats[0].Tokens)
+	}
+	if diff := math.Abs(stats[0].Cost - 0.03); diff > 0.000001 {
+		t.Fatalf("cost = %.6f, want 0.03", stats[0].Cost)
+	}
+
+	widerStats, err := db.GetIPUsageStats(ctx, 10, now.Add(-15*time.Minute))
+	if err != nil {
+		t.Fatalf("GetIPUsageStats wide 返回错误: %v", err)
+	}
+	if len(widerStats) != 4 {
+		t.Fatalf("len(widerStats) = %d, want 4 (%#v)", len(widerStats), widerStats)
+	}
+	foundOldWindowIP := false
+	for _, stat := range widerStats {
+		if stat.IP == "203.0.113.9" {
+			foundOldWindowIP = true
+			if stat.Requests != 1 || stat.Tokens != 300 {
+				t.Fatalf("old window stat = %#v, want requests=1 tokens=300", stat)
+			}
+			if stat.RPM != 0 || stat.TPM != 0 {
+				t.Fatalf("old window rpm/tpm = %#v, want rpm=0 tpm=0", stat)
+			}
+		}
+	}
+	if !foundOldWindowIP {
+		t.Fatal("wide window missing 203.0.113.9")
+	}
+
+	total, err := db.CountIPUsageStats(ctx)
+	if err != nil {
+		t.Fatalf("CountIPUsageStats 返回错误: %v", err)
+	}
+	if total != 4 {
+		t.Fatalf("CountIPUsageStats = %d, want 4", total)
+	}
+
+	limited, err := db.GetIPUsageStats(ctx, 2, now.Add(-5*time.Minute))
+	if err != nil {
+		t.Fatalf("GetIPUsageStats limited 返回错误: %v", err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("len(limited) = %d, want 2 (%#v)", len(limited), limited)
 	}
 }
 

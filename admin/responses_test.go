@@ -307,6 +307,32 @@ func TestOpsOverviewResponse(t *testing.T) {
 	}
 }
 
+func TestClassifyIPStatStatuses(t *testing.T) {
+	stats := []database.IPUsageStat{
+		{IP: "203.0.113.10", Requests: 20, QPS: 1, RPM: 10, TPM: 1000},
+		{IP: "203.0.113.11", Requests: 16, QPS: 0.8, RPM: 8, TPM: 800},
+		{IP: "203.0.113.12", Requests: 2, QPS: 0.2, RPM: 2, TPM: 200},
+		{IP: "203.0.113.13", Requests: 1, QPS: 0.1, RPM: 1, TPM: 100},
+	}
+
+	classifyIPStatStatuses(stats, 10, 0, map[string]struct{}{
+		"203.0.113.13": {},
+	})
+
+	if stats[0].Status != "abnormal" {
+		t.Fatalf("status[0] = %q, want abnormal", stats[0].Status)
+	}
+	if stats[1].Status != "watch" {
+		t.Fatalf("status[1] = %q, want watch", stats[1].Status)
+	}
+	if stats[2].Status != "normal" {
+		t.Fatalf("status[2] = %q, want normal", stats[2].Status)
+	}
+	if stats[3].Status != "banned" {
+		t.Fatalf("status[3] = %q, want banned", stats[3].Status)
+	}
+}
+
 // ==================== Response Serialization Tests ====================
 
 func TestStatsResponseJSON(t *testing.T) {

@@ -628,17 +628,25 @@ func TestRateLimiterIPQPSAllowsSecondRequestAfterOneSecondWhileFirstRuns(t *test
 
 func TestRateLimiterLimitsQPSByIPForV1(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
 	rl := NewRateLimiter(0)
 	rl.UpdateIPQPSLimit(1)
 
 	router := gin.New()
 	router.Use(rl.Middleware())
-	router.GET("/v1/responses", func(c *gin.Context) {
+	router.POST("/v1/responses", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
 	firstRecorder := httptest.NewRecorder()
-	firstReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
 	firstReq.RemoteAddr = "203.0.113.12:1234"
 	router.ServeHTTP(firstRecorder, firstReq)
 	if firstRecorder.Code != http.StatusOK {
@@ -646,14 +654,14 @@ func TestRateLimiterLimitsQPSByIPForV1(t *testing.T) {
 	}
 
 	secondRecorder := httptest.NewRecorder()
-	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
 	secondReq.RemoteAddr = "203.0.113.12:5678"
 	router.ServeHTTP(secondRecorder, secondReq)
-	if secondRecorder.Code != http.StatusTooManyRequests {
-		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d; body=%s", secondRecorder.Code, http.StatusOK, secondRecorder.Body.String())
 	}
-	if body := secondRecorder.Body.String(); !strings.Contains(body, "ip_qps_limit_exceeded") {
-		t.Fatalf("second body = %s, want ip_qps_limit_exceeded", body)
+	if body := secondRecorder.Body.String(); !strings.Contains(body, "已触发QPS限制，已被记录，请稍后重试") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("second body = %s, want protocol QPS message", body)
 	}
 }
 
@@ -714,12 +722,20 @@ func TestRateLimiterIPQPSOnlyAppliesToV1(t *testing.T) {
 
 func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
 	rl := NewRateLimiter(0)
 	rl.UpdateIPRPMLimit(1)
 
 	router := gin.New()
 	router.Use(rl.Middleware())
-	router.GET("/v1/responses", func(c *gin.Context) {
+	router.POST("/v1/responses", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	router.GET("/backend-api/codex/responses", func(c *gin.Context) {
@@ -727,7 +743,7 @@ func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 	})
 
 	firstRecorder := httptest.NewRecorder()
-	firstReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
 	firstReq.RemoteAddr = "203.0.113.11:1234"
 	router.ServeHTTP(firstRecorder, firstReq)
 	if firstRecorder.Code != http.StatusOK {
@@ -735,11 +751,14 @@ func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 	}
 
 	secondRecorder := httptest.NewRecorder()
-	secondReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
 	secondReq.RemoteAddr = "203.0.113.11:5678"
 	router.ServeHTTP(secondRecorder, secondReq)
-	if secondRecorder.Code != http.StatusTooManyRequests {
-		t.Fatalf("second /v1 status = %d, want %d; body=%s", secondRecorder.Code, http.StatusTooManyRequests, secondRecorder.Body.String())
+	if secondRecorder.Code != http.StatusOK {
+		t.Fatalf("second /v1 status = %d, want %d; body=%s", secondRecorder.Code, http.StatusOK, secondRecorder.Body.String())
+	}
+	if body := secondRecorder.Body.String(); !strings.Contains(body, "已触发RPM限制，已被记录，请稍后重试") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("second body = %s, want protocol RPM message", body)
 	}
 
 	backendRecorder := httptest.NewRecorder()
@@ -753,12 +772,23 @@ func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 
 func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请联系管理员",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
 	rl := NewRateLimiter(0)
-	rl.UpdateIPBlacklist("203.0.113.20\n198.51.100.0/24")
+	rl.UpdateIPBanRules([]IPBanRule{
+		{IP: "203.0.113.20", Reason: "manual", Source: "manual", Enabled: true},
+		{IP: "198.51.100.0/24", Reason: "manual", Source: "manual", Enabled: true},
+	})
 
 	router := gin.New()
 	router.Use(rl.Middleware())
-	router.GET("/v1/responses", func(c *gin.Context) {
+	router.POST("/v1/responses", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	router.GET("/backend-api/codex/responses", func(c *gin.Context) {
@@ -766,26 +796,29 @@ func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
 	})
 
 	exactRecorder := httptest.NewRecorder()
-	exactReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	exactReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
 	exactReq.RemoteAddr = "203.0.113.20:1234"
 	router.ServeHTTP(exactRecorder, exactReq)
-	if exactRecorder.Code != http.StatusForbidden {
-		t.Fatalf("exact status = %d, want %d; body=%s", exactRecorder.Code, http.StatusForbidden, exactRecorder.Body.String())
+	if exactRecorder.Code != http.StatusOK {
+		t.Fatalf("exact status = %d, want %d; body=%s", exactRecorder.Code, http.StatusOK, exactRecorder.Body.String())
 	}
-	if body := exactRecorder.Body.String(); !strings.Contains(body, "ip_blacklisted") {
-		t.Fatalf("exact body = %s, want ip_blacklisted", body)
+	if body := exactRecorder.Body.String(); !strings.Contains(body, "触发风控已被锁定, 请稍后再试，请联系管理员") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("exact body = %s, want protocol ban message", body)
 	}
 
-	cidrRecorder := httptest.NewRecorder()
-	cidrReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
-	cidrReq.RemoteAddr = "198.51.100.88:5678"
-	router.ServeHTTP(cidrRecorder, cidrReq)
-	if cidrRecorder.Code != http.StatusForbidden {
-		t.Fatalf("cidr status = %d, want %d; body=%s", cidrRecorder.Code, http.StatusForbidden, cidrRecorder.Body.String())
+	cidrMemberRecorder := httptest.NewRecorder()
+	cidrMemberReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	cidrMemberReq.RemoteAddr = "198.51.100.88:5678"
+	router.ServeHTTP(cidrMemberRecorder, cidrMemberReq)
+	if cidrMemberRecorder.Code != http.StatusOK {
+		t.Fatalf("cidr member status = %d, want %d; body=%s", cidrMemberRecorder.Code, http.StatusOK, cidrMemberRecorder.Body.String())
+	}
+	if strings.Contains(cidrMemberRecorder.Body.String(), "触发风控已被锁定") {
+		t.Fatalf("cidr member body = %s, want handler response", cidrMemberRecorder.Body.String())
 	}
 
 	allowedRecorder := httptest.NewRecorder()
-	allowedReq := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	allowedReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
 	allowedReq.RemoteAddr = "203.0.113.21:5678"
 	router.ServeHTTP(allowedRecorder, allowedReq)
 	if allowedRecorder.Code != http.StatusOK {
@@ -798,6 +831,75 @@ func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
 	router.ServeHTTP(backendRecorder, backendReq)
 	if backendRecorder.Code != http.StatusOK {
 		t.Fatalf("backend status = %d, want %d; body=%s", backendRecorder.Code, http.StatusOK, backendRecorder.Body.String())
+	}
+}
+
+func TestRateLimiterAutoBansIPAfterRPMLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	rl := NewRateLimiter(0)
+	rl.UpdateIPRPMLimit(1)
+	rl.UpdateIPAutoBanConfig(IPAutoBanConfig{
+		Enabled:  true,
+		Duration: time.Hour,
+		BanOnRPM: true,
+		BanOnQPS: true,
+	})
+	var (
+		bannedIP string
+		reason   string
+		expires  time.Time
+	)
+	rl.SetIPAutoBanCallback(func(ip string, banReason string, expiresAt time.Time) {
+		bannedIP = ip
+		reason = banReason
+		expires = expiresAt
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	firstReq.RemoteAddr = "203.0.113.44:1234"
+	router.ServeHTTP(first, firstReq)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	secondReq.RemoteAddr = "203.0.113.44:1234"
+	router.ServeHTTP(second, secondReq)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200; body=%s", second.Code, second.Body.String())
+	}
+	if !strings.Contains(second.Body.String(), "已触发RPM限制，已被记录，请稍后重试") {
+		t.Fatalf("second body = %s, want RPM protocol message", second.Body.String())
+	}
+	if bannedIP != "203.0.113.44" || reason != "rpm_limit" || expires.IsZero() {
+		t.Fatalf("auto ban callback = ip=%q reason=%q expires=%v", bannedIP, reason, expires)
+	}
+
+	third := httptest.NewRecorder()
+	thirdReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	thirdReq.RemoteAddr = "203.0.113.44:1234"
+	router.ServeHTTP(third, thirdReq)
+	if third.Code != http.StatusOK {
+		t.Fatalf("third status = %d, want 200; body=%s", third.Code, third.Body.String())
+	}
+	if !strings.Contains(third.Body.String(), "触发风控已被锁定, 请稍后再试，请稍后重试") {
+		t.Fatalf("third body = %s, want protocol ban message", third.Body.String())
 	}
 }
 

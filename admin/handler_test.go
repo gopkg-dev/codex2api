@@ -338,6 +338,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		ImageStorageConfig:               "{}",
 		IPQPSLimit:                       2,
 		IPRPMLimit:                       20,
+		IPAutoBanDurationMinutes:         30,
+		IPAutoBanOnQPS:                   true,
+		IPAutoBanOnRPM:                   true,
 		FilterLocalFallbackResponse:      true,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 	}
@@ -350,7 +353,8 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	body := `{
 		"ip_qps_limit": 4,
 		"ip_rpm_limit": 9,
-		"ip_blacklist": "203.0.113.20\n198.51.100.0/24",
+		"ip_auto_ban_enabled": true,
+		"ip_auto_ban_duration_minutes": 45,
 		"filter_local_fallback_response": false,
 		"api_key_disabled_message": "这个 API Key 已暂停使用",
 		"api_maintenance_enabled": true,
@@ -388,8 +392,8 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if payload.IPRPMLimit != 9 {
 		t.Fatalf("IPRPMLimit = %d, want 9", payload.IPRPMLimit)
 	}
-	if payload.IPBlacklist != "203.0.113.20\n198.51.100.0/24" {
-		t.Fatalf("IPBlacklist = %q, want configured blacklist", payload.IPBlacklist)
+	if !payload.IPAutoBanEnabled || payload.IPAutoBanDurationMinutes != 45 {
+		t.Fatalf("IP auto ban payload = enabled=%v duration=%d", payload.IPAutoBanEnabled, payload.IPAutoBanDurationMinutes)
 	}
 
 	gotSettings, err := db.GetSystemSettings(context.Background())
@@ -408,17 +412,14 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if gotSettings.IPRPMLimit != 9 {
 		t.Fatalf("persisted IPRPMLimit = %d, want 9", gotSettings.IPRPMLimit)
 	}
-	if gotSettings.IPBlacklist != "203.0.113.20\n198.51.100.0/24" {
-		t.Fatalf("persisted IPBlacklist = %q, want configured blacklist", gotSettings.IPBlacklist)
+	if !gotSettings.IPAutoBanEnabled || gotSettings.IPAutoBanDurationMinutes != 45 {
+		t.Fatalf("persisted auto ban = enabled=%v duration=%d", gotSettings.IPAutoBanEnabled, gotSettings.IPAutoBanDurationMinutes)
 	}
 	if got := handler.rateLimiter.GetIPQPSLimit(); got != 4 {
 		t.Fatalf("runtime IPQPSLimit = %d, want 4", got)
 	}
 	if got := handler.rateLimiter.GetIPRPMLimit(); got != 9 {
 		t.Fatalf("runtime IPRPMLimit = %d, want 9", got)
-	}
-	if got := handler.rateLimiter.GetIPBlacklist(); got != "203.0.113.20\n198.51.100.0/24" {
-		t.Fatalf("runtime IPBlacklist = %q, want configured blacklist", got)
 	}
 	runtimeCfg := proxy.CurrentRuntimeSettings()
 	if runtimeCfg.FilterLocalFallbackResponse {

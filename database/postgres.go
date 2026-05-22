@@ -600,7 +600,10 @@ func (db *DB) migrate(ctx context.Context) error {
 			ip_concurrency_limit INT DEFAULT 0,
 			ip_qps_limit       INT DEFAULT 0,
 			ip_rpm_limit       INT DEFAULT 0,
-			ip_blacklist       TEXT DEFAULT '',
+			ip_auto_ban_enabled BOOLEAN DEFAULT FALSE,
+			ip_auto_ban_duration_minutes INT DEFAULT 30,
+			ip_auto_ban_on_qps BOOLEAN DEFAULT TRUE,
+			ip_auto_ban_on_rpm BOOLEAN DEFAULT TRUE,
 			test_model         VARCHAR(100) DEFAULT 'gpt-5.4',
 			test_concurrency   INT DEFAULT 50,
 			proxy_url          VARCHAR(500) DEFAULT '',
@@ -628,7 +631,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_concurrency_limit INT DEFAULT 0;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_qps_limit INT DEFAULT 0;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_rpm_limit INT DEFAULT 0;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_blacklist TEXT DEFAULT '';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_auto_ban_enabled BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_auto_ban_duration_minutes INT DEFAULT 30;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_auto_ban_on_qps BOOLEAN DEFAULT TRUE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS ip_auto_ban_on_rpm BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS pg_max_conns INT DEFAULT 50;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS redis_pool_size INT DEFAULT 30;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_clean_unauthorized BOOLEAN DEFAULT FALSE;
@@ -672,6 +678,20 @@ func (db *DB) migrate(ctx context.Context) error {
 	UPDATE system_settings
 	SET ip_qps_limit = COALESCE(NULLIF(ip_qps_limit, 0), ip_concurrency_limit, 0)
 	WHERE COALESCE(ip_qps_limit, 0) = 0 AND COALESCE(ip_concurrency_limit, 0) > 0;
+
+	CREATE TABLE IF NOT EXISTS ip_bans (
+		id SERIAL PRIMARY KEY,
+		ip TEXT NOT NULL UNIQUE,
+		reason VARCHAR(32) DEFAULT 'manual',
+		source VARCHAR(32) DEFAULT 'manual',
+		banned_at TIMESTAMPTZ DEFAULT NOW(),
+		expires_at TIMESTAMPTZ NULL,
+		unbanned_at TIMESTAMPTZ NULL,
+		hit_count BIGINT DEFAULT 1,
+		last_triggered_at TIMESTAMPTZ DEFAULT NOW(),
+		enabled BOOLEAN DEFAULT TRUE
+	);
+	CREATE INDEX IF NOT EXISTS idx_ip_bans_active ON ip_bans(enabled, unbanned_at, expires_at);
 
 			CREATE TABLE IF NOT EXISTS prompt_filter_logs (
 				id               SERIAL PRIMARY KEY,
@@ -792,6 +812,9 @@ func (db *DB) migrate(ctx context.Context) error {
 	`
 	_, err := db.conn.ExecContext(ctx, query)
 	if err != nil {
+		return err
+	}
+	if err := db.migrateLegacyIPBlacklist(ctx); err != nil {
 		return err
 	}
 
@@ -1112,7 +1135,10 @@ type SystemSettings struct {
 	GlobalRPM                        int
 	IPQPSLimit                       int
 	IPRPMLimit                       int
-	IPBlacklist                      string
+	IPAutoBanEnabled                 bool
+	IPAutoBanDurationMinutes         int
+	IPAutoBanOnQPS                   bool
+	IPAutoBanOnRPM                   bool
 	TestModel                        string
 	TestConcurrency                  int
 	ProxyURL                         string
@@ -1163,7 +1189,9 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	s := &SystemSettings{}
 	err := db.conn.QueryRowContext(ctx, `
 		SELECT COALESCE(site_name, 'CodexProxy'), COALESCE(site_logo, ''),
-		       max_concurrency, global_rpm, COALESCE(ip_qps_limit, 0), COALESCE(ip_rpm_limit, 0), COALESCE(ip_blacklist, ''), test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+		       max_concurrency, global_rpm, COALESCE(ip_qps_limit, 0), COALESCE(ip_rpm_limit, 0),
+		       COALESCE(ip_auto_ban_enabled, false), COALESCE(ip_auto_ban_duration_minutes, 30), COALESCE(ip_auto_ban_on_qps, true), COALESCE(ip_auto_ban_on_rpm, true),
+		       test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 		       auto_clean_unauthorized, auto_clean_rate_limited, COALESCE(admin_secret, ''), COALESCE(auto_clean_full_usage, false),
 		       COALESCE(proxy_pool_enabled, false),
 		       COALESCE(fast_scheduler_enabled, false),
@@ -1202,7 +1230,9 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		FROM system_settings WHERE id = 1
 	`).Scan(
 		&s.SiteName, &s.SiteLogo,
-		&s.MaxConcurrency, &s.GlobalRPM, &s.IPQPSLimit, &s.IPRPMLimit, &s.IPBlacklist, &s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
+		&s.MaxConcurrency, &s.GlobalRPM, &s.IPQPSLimit, &s.IPRPMLimit,
+		&s.IPAutoBanEnabled, &s.IPAutoBanDurationMinutes, &s.IPAutoBanOnQPS, &s.IPAutoBanOnRPM,
+		&s.TestModel, &s.TestConcurrency, &s.ProxyURL, &s.PgMaxConns, &s.RedisPoolSize,
 		&s.AutoCleanUnauthorized, &s.AutoCleanRateLimited, &s.AdminSecret, &s.AutoCleanFullUsage,
 		&s.ProxyPoolEnabled, &s.FastSchedulerEnabled, &s.MaxRetries, &s.MaxRateLimitRetries, &s.AllowRemoteMigration,
 		&s.AutoCleanError, &s.AutoCleanExpired, &s.ModelMapping,
@@ -1221,7 +1251,9 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	}
 	s.SiteName = NormalizeSiteName(s.SiteName)
 	s.SiteLogo = strings.TrimSpace(s.SiteLogo)
-	s.IPBlacklist = strings.TrimSpace(s.IPBlacklist)
+	if s.IPAutoBanDurationMinutes <= 0 {
+		s.IPAutoBanDurationMinutes = 30
+	}
 	s.APIKeyDisabledMessage = strings.TrimSpace(s.APIKeyDisabledMessage)
 	return s, err
 }
@@ -1230,7 +1262,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error {
 	_, err := db.conn.ExecContext(ctx, `
 			INSERT INTO system_settings (
-				id, site_name, site_logo, max_concurrency, global_rpm, ip_qps_limit, ip_rpm_limit, ip_blacklist, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
+				id, site_name, site_logo, max_concurrency, global_rpm, ip_qps_limit, ip_rpm_limit, ip_auto_ban_enabled, ip_auto_ban_duration_minutes, ip_auto_ban_on_qps, ip_auto_ban_on_rpm, test_model, test_concurrency, proxy_url, pg_max_conns, redis_pool_size,
 				auto_clean_unauthorized, auto_clean_rate_limited, admin_secret, auto_clean_full_usage, proxy_pool_enabled,
 				fast_scheduler_enabled, max_retries, max_rate_limit_retries, allow_remote_migration, auto_clean_error, auto_clean_expired, model_mapping,
 				background_refresh_interval_minutes, usage_probe_max_age_minutes, recovery_probe_interval_minutes,
@@ -1241,7 +1273,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
 				image_storage_config, scheduler_mode, filter_local_fallback_response, api_key_disabled_message, api_maintenance_config
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1249,7 +1281,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				global_rpm              = EXCLUDED.global_rpm,
 				ip_qps_limit            = EXCLUDED.ip_qps_limit,
 				ip_rpm_limit            = EXCLUDED.ip_rpm_limit,
-				ip_blacklist            = EXCLUDED.ip_blacklist,
+				ip_auto_ban_enabled     = EXCLUDED.ip_auto_ban_enabled,
+				ip_auto_ban_duration_minutes = EXCLUDED.ip_auto_ban_duration_minutes,
+				ip_auto_ban_on_qps      = EXCLUDED.ip_auto_ban_on_qps,
+				ip_auto_ban_on_rpm      = EXCLUDED.ip_auto_ban_on_rpm,
 				test_model              = EXCLUDED.test_model,
 				test_concurrency        = EXCLUDED.test_concurrency,
 				proxy_url               = EXCLUDED.proxy_url,
@@ -1294,7 +1329,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				api_key_disabled_message = EXCLUDED.api_key_disabled_message,
 				api_maintenance_config = EXCLUDED.api_maintenance_config
 		`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
-		s.MaxConcurrency, s.GlobalRPM, s.IPQPSLimit, s.IPRPMLimit, strings.TrimSpace(s.IPBlacklist), s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
+		s.MaxConcurrency, s.GlobalRPM, s.IPQPSLimit, s.IPRPMLimit, s.IPAutoBanEnabled, s.IPAutoBanDurationMinutes, s.IPAutoBanOnQPS, s.IPAutoBanOnRPM, s.TestModel, s.TestConcurrency, s.ProxyURL, s.PgMaxConns, s.RedisPoolSize,
 		s.AutoCleanUnauthorized, s.AutoCleanRateLimited, s.AdminSecret, s.AutoCleanFullUsage, s.ProxyPoolEnabled,
 		s.FastSchedulerEnabled, s.MaxRetries, s.MaxRateLimitRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.ModelMapping,
 		s.BackgroundRefreshIntervalMinutes, s.UsageProbeMaxAgeMinutes, s.RecoveryProbeIntervalMinutes,
@@ -1936,49 +1971,63 @@ type UsageStats struct {
 type IPUsageStat struct {
 	IP       string  `json:"ip"`
 	Requests int64   `json:"requests"`
+	Tokens   int64   `json:"tokens"`
+	Cost     float64 `json:"cost"`
 	QPS      float64 `json:"qps"`
 	RPM      float64 `json:"rpm"`
 	TPM      float64 `json:"tpm"`
+	Status   string  `json:"status"`
 }
 
-func (db *DB) GetIPUsageStats(ctx context.Context, limit int) ([]IPUsageStat, error) {
+func (db *DB) GetIPUsageStats(ctx context.Context, limit int, windowStart time.Time) ([]IPUsageStat, error) {
 	if db == nil {
 		return []IPUsageStat{}, nil
 	}
-	if limit <= 0 {
-		limit = 8
-	}
-	if limit > 50 {
-		limit = 50
+	if limit > 200 {
+		limit = 200
 	}
 
 	now := time.Now()
-	windowStart := db.timeArg(now.Add(-5 * time.Minute))
+	if windowStart.IsZero() {
+		windowStart = now.Add(-5 * time.Minute)
+	}
+	windowStartArg := db.timeArg(windowStart)
 	qpsStart := db.timeArg(now.Add(-10 * time.Second))
 	rpmStart := db.timeArg(now.Add(-1 * time.Minute))
-	rows, err := db.conn.QueryContext(ctx, `
+	query := `
 		SELECT
-			COALESCE(NULLIF(client_ip, ''), 'unknown') AS ip,
+			TRIM(client_ip) AS ip,
 			COUNT(*) AS requests,
-			COALESCE(SUM(CASE WHEN created_at >= $2 THEN 1 ELSE 0 END), 0) / 10.0 AS qps,
-			COALESCE(SUM(CASE WHEN created_at >= $3 THEN 1 ELSE 0 END), 0) AS rpm,
-			COALESCE(SUM(CASE WHEN created_at >= $3 THEN total_tokens ELSE 0 END), 0) AS tpm
+			COALESCE(SUM(total_tokens), 0) AS tokens,
+			COALESCE(SUM(user_billed), 0) AS cost,
+			COALESCE(SUM(CASE WHEN created_at >= $1 THEN 1 ELSE 0 END), 0) / 10.0 AS qps,
+			COALESCE(SUM(CASE WHEN created_at >= $2 THEN 1 ELSE 0 END), 0) AS rpm,
+			COALESCE(SUM(CASE WHEN created_at >= $2 THEN total_tokens ELSE 0 END), 0) AS tpm
 		FROM usage_logs
-		WHERE created_at >= $1
-		  AND status_code <> 499
-		GROUP BY COALESCE(NULLIF(client_ip, ''), 'unknown')
-		ORDER BY requests DESC, rpm DESC, ip ASC
-		LIMIT $4
-	`, windowStart, qpsStart, rpmStart, limit)
+		WHERE NULLIF(TRIM(client_ip), '') IS NOT NULL
+		  AND created_at >= $3
+		GROUP BY TRIM(client_ip)
+		ORDER BY rpm DESC, requests DESC, ip ASC
+	`
+	args := []interface{}{qpsStart, rpmStart, windowStartArg}
+	if limit > 0 {
+		query += ` LIMIT $4`
+		args = append(args, limit)
+	}
+	rows, err := db.conn.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	stats := make([]IPUsageStat, 0, limit)
+	capacity := limit
+	if capacity <= 0 {
+		capacity = 16
+	}
+	stats := make([]IPUsageStat, 0, capacity)
 	for rows.Next() {
 		var stat IPUsageStat
-		if err := rows.Scan(&stat.IP, &stat.Requests, &stat.QPS, &stat.RPM, &stat.TPM); err != nil {
+		if err := rows.Scan(&stat.IP, &stat.Requests, &stat.Tokens, &stat.Cost, &stat.QPS, &stat.RPM, &stat.TPM); err != nil {
 			return nil, err
 		}
 		stats = append(stats, stat)
@@ -1987,6 +2036,22 @@ func (db *DB) GetIPUsageStats(ctx context.Context, limit int) ([]IPUsageStat, er
 		return nil, err
 	}
 	return stats, nil
+}
+
+func (db *DB) CountIPUsageStats(ctx context.Context) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	var total int64
+	err := db.conn.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT TRIM(client_ip))
+		FROM usage_logs
+		WHERE NULLIF(TRIM(client_ip), '') IS NOT NULL
+	`).Scan(&total)
+	if err != nil {
+		return 0, err
+	}
+	return total, nil
 }
 
 // UsageModelStat 按计费模型聚合的请求和金额统计。

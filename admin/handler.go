@@ -244,6 +244,10 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.GET("/ops/errors/summary", h.GetOpsErrorSummary)
 	api.GET("/settings", h.GetSettings)
 	api.PUT("/settings", h.UpdateSettings)
+	api.GET("/ip-bans", h.ListIPBans)
+	api.POST("/ip-bans", h.CreateIPBan)
+	api.POST("/ip-bans/:id/unban", h.UnbanIPBan)
+	api.DELETE("/ip-bans/:id", h.DeleteIPBan)
 	api.POST("/settings/image-storage/test", h.TestImageStorageConnection)
 	api.GET("/prompt-filter/logs", h.ListPromptFilterLogs)
 	api.DELETE("/prompt-filter/logs", h.ClearPromptFilterLogs)
@@ -3680,7 +3684,10 @@ type settingsResponse struct {
 	GlobalRPM                        int    `json:"global_rpm"`
 	IPQPSLimit                       int    `json:"ip_qps_limit"`
 	IPRPMLimit                       int    `json:"ip_rpm_limit"`
-	IPBlacklist                      string `json:"ip_blacklist"`
+	IPAutoBanEnabled                 bool   `json:"ip_auto_ban_enabled"`
+	IPAutoBanDurationMinutes         int    `json:"ip_auto_ban_duration_minutes"`
+	IPAutoBanOnQPS                   bool   `json:"ip_auto_ban_on_qps"`
+	IPAutoBanOnRPM                   bool   `json:"ip_auto_ban_on_rpm"`
 	TestModel                        string `json:"test_model"`
 	TestConcurrency                  int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes int    `json:"background_refresh_interval_minutes"`
@@ -3751,7 +3758,10 @@ type updateSettingsReq struct {
 	IPQPSLimit                       *int    `json:"ip_qps_limit"`
 	LegacyIPQPSLimit                 *int    `json:"ip_concurrency_limit"`
 	IPRPMLimit                       *int    `json:"ip_rpm_limit"`
-	IPBlacklist                      *string `json:"ip_blacklist"`
+	IPAutoBanEnabled                 *bool   `json:"ip_auto_ban_enabled"`
+	IPAutoBanDurationMinutes         *int    `json:"ip_auto_ban_duration_minutes"`
+	IPAutoBanOnQPS                   *bool   `json:"ip_auto_ban_on_qps"`
+	IPAutoBanOnRPM                   *bool   `json:"ip_auto_ban_on_rpm"`
 	TestModel                        *string `json:"test_model"`
 	TestConcurrency                  *int    `json:"test_concurrency"`
 	BackgroundRefreshIntervalMinutes *int    `json:"background_refresh_interval_minutes"`
@@ -3861,6 +3871,179 @@ func brandingFromSettings(settings *database.SystemSettings) brandingResponse {
 	return resp
 }
 
+func normalizedIPAutoBanDuration(settings *database.SystemSettings) int {
+	if settings == nil || settings.IPAutoBanDurationMinutes <= 0 {
+		return 30
+	}
+	return settings.IPAutoBanDurationMinutes
+}
+
+func (h *Handler) applyIPAutoBanRuntime(settings *database.SystemSettings) {
+	if h == nil || h.rateLimiter == nil {
+		return
+	}
+	h.rateLimiter.UpdateIPAutoBanConfig(proxy.IPAutoBanConfig{
+		Enabled:  settings != nil && settings.IPAutoBanEnabled,
+		Duration: time.Duration(normalizedIPAutoBanDuration(settings)) * time.Minute,
+		BanOnQPS: settings == nil || settings.IPAutoBanOnQPS,
+		BanOnRPM: settings == nil || settings.IPAutoBanOnRPM,
+	})
+}
+
+type ipBanResponse struct {
+	ID              int64  `json:"id"`
+	IP              string `json:"ip"`
+	Reason          string `json:"reason"`
+	Source          string `json:"source"`
+	BannedAt        string `json:"banned_at"`
+	ExpiresAt       string `json:"expires_at,omitempty"`
+	UnbannedAt      string `json:"unbanned_at,omitempty"`
+	HitCount        int64  `json:"hit_count"`
+	LastTriggeredAt string `json:"last_triggered_at,omitempty"`
+	Enabled         bool   `json:"enabled"`
+}
+
+type listIPBansResponse struct {
+	Bans []ipBanResponse `json:"bans"`
+}
+
+type createIPBanReq struct {
+	IP               string `json:"ip"`
+	Reason           string `json:"reason"`
+	Source           string `json:"source"`
+	ExpiresInMinutes int    `json:"expires_in_minutes"`
+}
+
+func ipBanToResponse(row database.IPBanRow) ipBanResponse {
+	resp := ipBanResponse{
+		ID:       row.ID,
+		IP:       row.IP,
+		Reason:   row.Reason,
+		Source:   row.Source,
+		BannedAt: row.BannedAt.Format(time.RFC3339),
+		HitCount: row.HitCount,
+		Enabled:  row.Enabled,
+	}
+	if row.ExpiresAt.Valid {
+		resp.ExpiresAt = row.ExpiresAt.Time.Format(time.RFC3339)
+	}
+	if row.UnbannedAt.Valid {
+		resp.UnbannedAt = row.UnbannedAt.Time.Format(time.RFC3339)
+	}
+	if row.LastTriggeredAt.Valid {
+		resp.LastTriggeredAt = row.LastTriggeredAt.Time.Format(time.RFC3339)
+	}
+	return resp
+}
+
+func ipBansToRuntimeRules(rows []database.IPBanRow) []proxy.IPBanRule {
+	rules := make([]proxy.IPBanRule, 0, len(rows))
+	for _, row := range rows {
+		expiresAt := time.Time{}
+		if row.ExpiresAt.Valid {
+			expiresAt = row.ExpiresAt.Time
+		}
+		rules = append(rules, proxy.IPBanRule{
+			IP:        row.IP,
+			Reason:    row.Reason,
+			Source:    row.Source,
+			ExpiresAt: expiresAt,
+			Enabled:   row.Enabled && !row.UnbannedAt.Valid,
+		})
+	}
+	return rules
+}
+
+func (h *Handler) reloadIPBanRuntime(ctx context.Context) {
+	if h == nil || h.db == nil || h.rateLimiter == nil {
+		return
+	}
+	rows, err := h.db.ListIPBans(ctx, false)
+	if err != nil {
+		log.Printf("刷新 IP 封禁运行时失败: %v", err)
+		return
+	}
+	h.rateLimiter.UpdateIPBanRules(ipBansToRuntimeRules(rows))
+}
+
+func (h *Handler) ListIPBans(c *gin.Context) {
+	includeInactive := c.Query("include_inactive") == "1" || c.Query("include_inactive") == "true"
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	rows, err := h.db.ListIPBans(ctx, includeInactive)
+	if err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	resp := listIPBansResponse{Bans: make([]ipBanResponse, 0, len(rows))}
+	for _, row := range rows {
+		resp.Bans = append(resp.Bans, ipBanToResponse(row))
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *Handler) CreateIPBan(c *gin.Context) {
+	var req createIPBanReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	expiresAt := sql.NullTime{}
+	if req.ExpiresInMinutes > 0 {
+		if req.ExpiresInMinutes > 10080 {
+			req.ExpiresInMinutes = 10080
+		}
+		expiresAt = sql.NullTime{Time: time.Now().Add(time.Duration(req.ExpiresInMinutes) * time.Minute), Valid: true}
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	row, err := h.db.CreateIPBan(ctx, database.IPBanInput{
+		IP:        req.IP,
+		Reason:    req.Reason,
+		Source:    req.Source,
+		ExpiresAt: expiresAt,
+		Enabled:   true,
+	})
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	h.reloadIPBanRuntime(ctx)
+	c.JSON(http.StatusOK, gin.H{"ban": ipBanToResponse(*row)})
+}
+
+func (h *Handler) UnbanIPBan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "无效 ID")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	if err := h.db.UnbanIPBan(ctx, id); err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	h.reloadIPBanRuntime(ctx)
+	writeMessage(c, http.StatusOK, "已解封")
+}
+
+func (h *Handler) DeleteIPBan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		writeError(c, http.StatusBadRequest, "无效 ID")
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	if err := h.db.DeleteIPBan(ctx, id); err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	h.reloadIPBanRuntime(ctx)
+	writeMessage(c, http.StatusOK, "已删除")
+}
+
 // GetBranding 获取公开站点品牌配置（无需管理密钥）。
 func (h *Handler) GetBranding(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
@@ -3905,7 +4088,10 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
 		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
-		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
+		IPAutoBanEnabled:                 dbSettings != nil && dbSettings.IPAutoBanEnabled,
+		IPAutoBanDurationMinutes:         normalizedIPAutoBanDuration(dbSettings),
+		IPAutoBanOnQPS:                   dbSettings == nil || dbSettings.IPAutoBanOnQPS,
+		IPAutoBanOnRPM:                   dbSettings == nil || dbSettings.IPAutoBanOnRPM,
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -3980,6 +4166,13 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 	siteName := database.DefaultSiteName
 	siteLogo := ""
 	existingSettings, _ := h.db.GetSystemSettings(c.Request.Context())
+	if existingSettings == nil {
+		existingSettings = &database.SystemSettings{
+			IPAutoBanDurationMinutes: 30,
+			IPAutoBanOnQPS:           true,
+			IPAutoBanOnRPM:           true,
+		}
+	}
 	if existingSettings != nil {
 		currentAdminSecret = existingSettings.AdminSecret
 		siteName = database.NormalizeSiteName(existingSettings.SiteName)
@@ -4057,10 +4250,26 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		h.rateLimiter.UpdateIPRPMLimit(v)
 		log.Printf("设置已更新: ip_rpm_limit = %d", v)
 	}
-	if req.IPBlacklist != nil {
-		h.rateLimiter.UpdateIPBlacklist(*req.IPBlacklist)
-		log.Printf("设置已更新: ip_blacklist")
+	if req.IPAutoBanEnabled != nil {
+		existingSettings.IPAutoBanEnabled = *req.IPAutoBanEnabled
 	}
+	if req.IPAutoBanDurationMinutes != nil {
+		v := *req.IPAutoBanDurationMinutes
+		if v < 1 {
+			v = 1
+		}
+		if v > 10080 {
+			v = 10080
+		}
+		existingSettings.IPAutoBanDurationMinutes = v
+	}
+	if req.IPAutoBanOnQPS != nil {
+		existingSettings.IPAutoBanOnQPS = *req.IPAutoBanOnQPS
+	}
+	if req.IPAutoBanOnRPM != nil {
+		existingSettings.IPAutoBanOnRPM = *req.IPAutoBanOnRPM
+	}
+	h.applyIPAutoBanRuntime(existingSettings)
 
 	if req.TestModel != nil && *req.TestModel != "" {
 		h.store.SetTestModel(*req.TestModel)
@@ -4463,7 +4672,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
 		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
-		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
+		IPAutoBanEnabled:                 existingSettings.IPAutoBanEnabled,
+		IPAutoBanDurationMinutes:         normalizedIPAutoBanDuration(existingSettings),
+		IPAutoBanOnQPS:                   existingSettings.IPAutoBanOnQPS,
+		IPAutoBanOnRPM:                   existingSettings.IPAutoBanOnRPM,
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
@@ -4536,7 +4748,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		GlobalRPM:                        h.rateLimiter.GetRPM(),
 		IPQPSLimit:                       h.rateLimiter.GetIPQPSLimit(),
 		IPRPMLimit:                       h.rateLimiter.GetIPRPMLimit(),
-		IPBlacklist:                      h.rateLimiter.GetIPBlacklist(),
+		IPAutoBanEnabled:                 existingSettings.IPAutoBanEnabled,
+		IPAutoBanDurationMinutes:         normalizedIPAutoBanDuration(existingSettings),
+		IPAutoBanOnQPS:                   existingSettings.IPAutoBanOnQPS,
+		IPAutoBanOnRPM:                   existingSettings.IPAutoBanOnRPM,
 		TestModel:                        h.store.GetTestModel(),
 		TestConcurrency:                  h.store.GetTestConcurrency(),
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),

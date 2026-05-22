@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -116,7 +117,10 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				global_rpm INTEGER DEFAULT 0,
 				ip_qps_limit INTEGER DEFAULT 0,
 				ip_rpm_limit INTEGER DEFAULT 0,
-				ip_blacklist TEXT DEFAULT '',
+				ip_auto_ban_enabled INTEGER DEFAULT 0,
+				ip_auto_ban_duration_minutes INTEGER DEFAULT 30,
+				ip_auto_ban_on_qps INTEGER DEFAULT 1,
+				ip_auto_ban_on_rpm INTEGER DEFAULT 1,
 				test_model TEXT DEFAULT 'gpt-5.4',
 				test_concurrency INTEGER DEFAULT 50,
 				proxy_url TEXT DEFAULT '',
@@ -149,6 +153,18 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。',
 				api_maintenance_config TEXT DEFAULT '{}'
 			);`,
+		`CREATE TABLE IF NOT EXISTS ip_bans (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ip TEXT NOT NULL UNIQUE,
+			reason TEXT DEFAULT 'manual',
+			source TEXT DEFAULT 'manual',
+			banned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP NULL,
+			unbanned_at TIMESTAMP NULL,
+			hit_count INTEGER DEFAULT 1,
+			last_triggered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+			enabled INTEGER DEFAULT 1
+		);`,
 		`CREATE TABLE IF NOT EXISTS model_registry (
 			id TEXT PRIMARY KEY,
 			enabled INTEGER DEFAULT 1,
@@ -307,7 +323,10 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "site_logo", "TEXT DEFAULT ''"},
 		{"system_settings", "ip_qps_limit", "INTEGER DEFAULT 0"},
 		{"system_settings", "ip_rpm_limit", "INTEGER DEFAULT 0"},
-		{"system_settings", "ip_blacklist", "TEXT DEFAULT ''"},
+		{"system_settings", "ip_auto_ban_enabled", "INTEGER DEFAULT 0"},
+		{"system_settings", "ip_auto_ban_duration_minutes", "INTEGER DEFAULT 30"},
+		{"system_settings", "ip_auto_ban_on_qps", "INTEGER DEFAULT 1"},
+		{"system_settings", "ip_auto_ban_on_rpm", "INTEGER DEFAULT 1"},
 		{"system_settings", "pg_max_conns", "INTEGER DEFAULT 50"},
 		{"system_settings", "redis_pool_size", "INTEGER DEFAULT 30"},
 		{"system_settings", "auto_clean_unauthorized", "INTEGER DEFAULT 0"},
@@ -365,6 +384,9 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := db.migrateLegacyIPBlacklist(ctx); err != nil {
+		return err
+	}
 	systemColumns, err := db.sqliteTableColumns(ctx, "system_settings")
 	if err != nil {
 		return err
@@ -398,6 +420,7 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_account_model_cooldowns_reset_at ON account_model_cooldowns(reset_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_events_created ON account_events(created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_events_type_created ON account_events(event_type, created_at);`,
+		`CREATE INDEX IF NOT EXISTS idx_ip_bans_active ON ip_bans(enabled, unbanned_at, expires_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_updated ON image_prompt_templates(updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_favorite ON image_prompt_templates(favorite, updated_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_created ON image_generation_jobs(created_at);`,
@@ -427,6 +450,21 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (db *DB) dropSQLiteColumnIfExists(ctx context.Context, table string, column string) error {
+	columns, err := db.sqliteTableColumns(ctx, table)
+	if err != nil {
+		return err
+	}
+	if _, ok := columns[column]; !ok {
+		return nil
+	}
+	_, err = db.conn.ExecContext(ctx, fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, column))
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "no such column") {
+		return nil
+	}
+	return err
 }
 
 func (db *DB) ensureSQLiteColumn(ctx context.Context, table string, name string, columnDef string) error {

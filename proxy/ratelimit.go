@@ -797,20 +797,41 @@ func ComputeCooldown(prevLevel int) (time.Duration, int) {
 
 // RateLimiter 全局限流器（向后兼容）
 type RateLimiter struct {
-	enhanced         *EnhancedRateLimiter
-	ipMu             sync.Mutex
-	ipBuckets        map[string]*tokenBucket
-	ipQPSBuckets     map[string]*tokenBucket
-	ipBlacklistRaw   string
-	ipBlacklist      []ipBlacklistEntry
-	ipQPSLimitAtomic int64
-	ipRPMLimitAtomic int64
+	enhanced          *EnhancedRateLimiter
+	ipMu              sync.Mutex
+	ipBuckets         map[string]*tokenBucket
+	ipQPSBuckets      map[string]*tokenBucket
+	ipBans            []ipBanEntry
+	ipQPSLimitAtomic  int64
+	ipRPMLimitAtomic  int64
+	ipAutoBanEnabled  atomic.Bool
+	ipAutoBanOnQPS    atomic.Bool
+	ipAutoBanOnRPM    atomic.Bool
+	ipAutoBanDuration int64
+	ipAutoBanCallback func(ip string, reason string, expiresAt time.Time)
 }
 
-type ipBlacklistEntry struct {
-	raw    string
-	addr   netip.Addr
-	prefix netip.Prefix
+type IPBanRule struct {
+	IP        string
+	Reason    string
+	Source    string
+	ExpiresAt time.Time
+	Enabled   bool
+}
+
+type IPAutoBanConfig struct {
+	Enabled  bool
+	Duration time.Duration
+	BanOnQPS bool
+	BanOnRPM bool
+}
+
+type ipBanEntry struct {
+	raw       string
+	reason    string
+	source    string
+	expiresAt time.Time
+	addr      netip.Addr
 }
 
 // NewRateLimiter 创建限流器（向后兼容）
@@ -869,34 +890,76 @@ func (rl *RateLimiter) GetIPRPMLimit() int {
 	return int(atomic.LoadInt64(&rl.ipRPMLimitAtomic))
 }
 
-func (rl *RateLimiter) UpdateIPBlacklist(raw string) {
-	raw = strings.TrimSpace(raw)
-	entries := parseIPBlacklistEntries(raw)
+func (rl *RateLimiter) UpdateIPBanRules(rules []IPBanRule) {
+	entries := parseIPBanRules(rules)
 	rl.ipMu.Lock()
-	rl.ipBlacklistRaw = raw
-	rl.ipBlacklist = entries
+	rl.ipBans = entries
 	rl.ipMu.Unlock()
 }
 
-func (rl *RateLimiter) GetIPBlacklist() string {
-	rl.ipMu.Lock()
-	defer rl.ipMu.Unlock()
-	return rl.ipBlacklistRaw
+func (rl *RateLimiter) UpdateIPAutoBanConfig(config IPAutoBanConfig) {
+	duration := config.Duration
+	if duration <= 0 {
+		duration = 30 * time.Minute
+	}
+	rl.ipAutoBanEnabled.Store(config.Enabled)
+	rl.ipAutoBanOnQPS.Store(config.BanOnQPS)
+	rl.ipAutoBanOnRPM.Store(config.BanOnRPM)
+	atomic.StoreInt64(&rl.ipAutoBanDuration, int64(duration))
 }
 
-func (rl *RateLimiter) isIPBlacklisted(ip string) bool {
+func (rl *RateLimiter) SetIPAutoBanCallback(callback func(ip string, reason string, expiresAt time.Time)) {
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	rl.ipAutoBanCallback = callback
+}
+
+func (rl *RateLimiter) autoBanIP(ip string, reason string) {
+	if ip == "" || !rl.ipAutoBanEnabled.Load() {
+		return
+	}
+	if reason == "qps_limit" && !rl.ipAutoBanOnQPS.Load() {
+		return
+	}
+	if reason == "rpm_limit" && !rl.ipAutoBanOnRPM.Load() {
+		return
+	}
+	duration := time.Duration(atomic.LoadInt64(&rl.ipAutoBanDuration))
+	if duration <= 0 {
+		duration = 30 * time.Minute
+	}
+	expiresAt := time.Now().Add(duration)
+	entry := IPBanRule{
+		IP:        ip,
+		Reason:    reason,
+		Source:    "auto",
+		ExpiresAt: expiresAt,
+		Enabled:   true,
+	}
+	entries := parseIPBanRules([]IPBanRule{entry})
+	if len(entries) == 0 {
+		return
+	}
+	rl.ipMu.Lock()
+	rl.ipBans = upsertIPBanEntry(rl.ipBans, entries[0])
+	callback := rl.ipAutoBanCallback
+	rl.ipMu.Unlock()
+	if callback != nil {
+		callback(ip, reason, expiresAt)
+	}
+}
+
+func (rl *RateLimiter) isIPBanned(ip string) bool {
 	addr, ok := parseRateLimitIPAddr(ip)
 	if !ok {
 		return false
 	}
+	now := time.Now()
 	rl.ipMu.Lock()
-	entries := append([]ipBlacklistEntry(nil), rl.ipBlacklist...)
+	entries := append([]ipBanEntry(nil), rl.ipBans...)
 	rl.ipMu.Unlock()
 	for _, entry := range entries {
-		if entry.prefix.IsValid() {
-			if entry.prefix.Contains(addr) {
-				return true
-			}
+		if !entry.expiresAt.IsZero() && !entry.expiresAt.After(now) {
 			continue
 		}
 		if entry.addr.IsValid() && entry.addr == addr {
@@ -906,29 +969,22 @@ func (rl *RateLimiter) isIPBlacklisted(ip string) bool {
 	return false
 }
 
-func parseIPBlacklistEntries(raw string) []ipBlacklistEntry {
-	fields := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == ';'
-	})
-	entries := make([]ipBlacklistEntry, 0, len(fields))
+func parseIPBanRules(rules []IPBanRule) []ipBanEntry {
+	entries := make([]ipBanEntry, 0, len(rules))
 	seen := map[string]struct{}{}
-	for _, field := range fields {
-		value := strings.TrimSpace(field)
-		if value == "" || strings.HasPrefix(value, "#") {
+	now := time.Now()
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		if !rule.ExpiresAt.IsZero() && !rule.ExpiresAt.After(now) {
+			continue
+		}
+		value := strings.TrimSpace(rule.IP)
+		if value == "" {
 			continue
 		}
 		if strings.Contains(value, "/") {
-			prefix, err := netip.ParsePrefix(value)
-			if err != nil {
-				continue
-			}
-			prefix = prefix.Masked()
-			key := prefix.String()
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			entries = append(entries, ipBlacklistEntry{raw: value, prefix: prefix})
 			continue
 		}
 		addr, ok := parseRateLimitIPAddr(value)
@@ -940,9 +996,19 @@ func parseIPBlacklistEntries(raw string) []ipBlacklistEntry {
 			continue
 		}
 		seen[key] = struct{}{}
-		entries = append(entries, ipBlacklistEntry{raw: value, addr: addr})
+		entries = append(entries, ipBanEntry{raw: value, reason: rule.Reason, source: rule.Source, expiresAt: rule.ExpiresAt, addr: addr})
 	}
 	return entries
+}
+
+func upsertIPBanEntry(entries []ipBanEntry, next ipBanEntry) []ipBanEntry {
+	for i, entry := range entries {
+		if entry.raw == next.raw {
+			entries[i] = next
+			return entries
+		}
+	}
+	return append(entries, next)
 }
 
 func parseRateLimitIPAddr(value string) (netip.Addr, bool) {
@@ -1021,7 +1087,13 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 		}
 		clientIP := rateLimitClientIP(c)
 		if rateLimitIsV1Path(path) {
-			if rl.isIPBlacklisted(clientIP) {
+			runtimeSettings := CurrentRuntimeSettings()
+			fallbackMessage := runtimeMaintenanceMessage(runtimeSettings)
+			if rl.isIPBanned(clientIP) {
+				if writeProtocolMessageResponse(c, prefixedRuntimeMessage("触发风控已被锁定, 请稍后再试", fallbackMessage), runtimeSettings) {
+					c.Abort()
+					return
+				}
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
 						"message": "当前 IP 已被禁止访问 /v1 接口",
@@ -1033,6 +1105,11 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 				return
 			}
 			if !rl.allowIPRPM(clientIP) {
+				rl.autoBanIP(clientIP, "rpm_limit")
+				if writeProtocolMessageResponse(c, prefixedRuntimeMessage("已触发RPM限制，已被记录", fallbackMessage), runtimeSettings) {
+					c.Abort()
+					return
+				}
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"error": gin.H{
 						"message": "同一 IP 请求过于频繁，请稍后重试",
@@ -1044,6 +1121,11 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 				return
 			}
 			if !rl.allowIPQPS(clientIP) {
+				rl.autoBanIP(clientIP, "qps_limit")
+				if writeProtocolMessageResponse(c, prefixedRuntimeMessage("已触发QPS限制，已被记录", fallbackMessage), runtimeSettings) {
+					c.Abort()
+					return
+				}
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"error": gin.H{
 						"message": "同一 IP QPS 超出限制，请稍后重试",
