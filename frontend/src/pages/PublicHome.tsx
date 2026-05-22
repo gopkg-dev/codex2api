@@ -99,17 +99,27 @@ export default function PublicHome() {
   const [docsOpen, setDocsOpen] = useState(false);
   const [ipStatsOpen, setIPStatsOpen] = useState(false);
   const [ipStatsWindow, setIPStatsWindow] = useState<IPStatsWindow>("5m");
+  const [ipStatsLoading, setIPStatsLoading] = useState(false);
   const [docsInitialTab, setDocsInitialTab] =
     useState<PublicDocsTopTab>("codex");
   const chartAbort = useRef<AbortController | null>(null);
   const copyResetTimer = useRef<number | null>(null);
   const ccSwitchFallbackTimer = useRef<number | null>(null);
   const refreshInFlight = useRef(false);
+  const ipStatsWindowRef = useRef<IPStatsWindow>("5m");
+  const overviewRequestSeq = useRef(0);
+  const ipStatsLoadSeq = useRef(0);
 
-  const loadOverview = useCallback(async () => {
-    const res = await api.getPublicHome({ ipWindow: ipStatsWindow });
-    setOverview(res);
-  }, [ipStatsWindow]);
+  const loadOverview = useCallback(async (ipWindow?: IPStatsWindow) => {
+    const requestSeq = overviewRequestSeq.current + 1;
+    overviewRequestSeq.current = requestSeq;
+    const res = await api.getPublicHome({
+      ipWindow: ipWindow ?? ipStatsWindowRef.current,
+    });
+    if (requestSeq === overviewRequestSeq.current) {
+      setOverview(res);
+    }
+  }, []);
 
   const loadChart = useCallback(
     async (options?: { background?: boolean }) => {
@@ -246,6 +256,29 @@ export default function PublicHome() {
     setDocsInitialTab(tab);
     setDocsOpen(true);
   }, []);
+
+  const changeIPStatsWindow = useCallback(
+    (nextWindow: IPStatsWindow) => {
+      if (nextWindow === ipStatsWindowRef.current) return;
+      ipStatsWindowRef.current = nextWindow;
+      const loadSeq = ipStatsLoadSeq.current + 1;
+      ipStatsLoadSeq.current = loadSeq;
+      setIPStatsWindow(nextWindow);
+      setIPStatsLoading(true);
+      setError("");
+      void loadOverview(nextWindow)
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "加载失败");
+        })
+        .finally(() => {
+          if (loadSeq === ipStatsLoadSeq.current) {
+            setIPStatsLoading(false);
+            setRefreshCountdown(PUBLIC_REFRESH_INTERVAL_SECONDS);
+          }
+        });
+    },
+    [loadOverview],
+  );
   const showCcSwitchFallback = useCallback(() => {
     if (ccSwitchFallbackTimer.current !== null) {
       window.clearTimeout(ccSwitchFallbackTimer.current);
@@ -386,8 +419,8 @@ export default function PublicHome() {
           stats={ipStats}
           total={ipStatsTotal}
           windowKey={ipStatsWindow}
-          onWindowChange={setIPStatsWindow}
-          loading={loading}
+          onWindowChange={changeIPStatsWindow}
+          loading={loading || ipStatsLoading}
           onClose={() => setIPStatsOpen(false)}
         />
 
@@ -430,11 +463,11 @@ export default function PublicHome() {
               },
               {
                 label: "总计费用",
-                value: formatMoneyFixed4(usage?.total_user_billed),
+                value: formatMoneyFixed2(usage?.total_user_billed),
               },
               {
                 label: "今日费用",
-                value: formatMoneyFixed4(usage?.today_user_billed),
+                value: formatMoneyFixed2(usage?.today_user_billed),
               },
             ]}
           />
@@ -765,7 +798,11 @@ function PublicIPStatsModal({
               variant={windowKey === option.key ? "default" : "outline"}
               className="h-8 px-3 text-xs"
               onClick={() => onWindowChange(option.key)}
+              disabled={loading && windowKey === option.key}
             >
+              {loading && windowKey === option.key ? (
+                <RefreshCw className="mr-1 size-3 animate-spin" />
+              ) : null}
               {option.label}
             </Button>
           ))}
@@ -782,8 +819,8 @@ function PublicIPStatsModal({
           </div>
         ) : visibleStats.length > 0 ? (
           <div className="overflow-x-auto rounded-lg border border-border">
-            <div className="min-w-[860px]">
-              <div className="grid grid-cols-[minmax(180px,1.5fr)_minmax(80px,.8fr)_repeat(5,minmax(92px,1fr))] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
+            <div className="min-w-[680px] sm:min-w-full">
+              <div className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>IP</div>
                 <div>状态</div>
                 <div className="text-right">请求数</div>
@@ -796,7 +833,7 @@ function PublicIPStatsModal({
                 {visibleStats.map((item) => (
                   <div
                     key={item.ip}
-                    className="grid grid-cols-[minmax(180px,1.5fr)_minmax(80px,.8fr)_repeat(5,minmax(92px,1fr))] items-center px-3 py-2 text-sm"
+                    className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] items-center px-3 py-2 text-sm"
                   >
                     <div
                       className="truncate font-mono text-foreground"
@@ -820,7 +857,7 @@ function PublicIPStatsModal({
                       {formatCompactNumber(item.tokens)}
                     </div>
                     <div className="text-right tabular-nums text-foreground">
-                      {formatMoneyFixed4(item.cost)}
+                      {formatMoneyFixed2(item.cost)}
                     </div>
                   </div>
                 ))}
@@ -1970,16 +2007,11 @@ function formatLatency(value?: number | null): string {
 }
 
 function formatMoney(value?: number | null): string {
-  const amount = value ?? 0;
-  if (amount >= 100)
-    return `$${amount.toLocaleString(undefined, { maximumFractionDigits: 1 })}`;
-  if (amount >= 1) return `$${amount.toFixed(2)}`;
-  if (amount >= 0.01) return `$${amount.toFixed(4)}`;
-  return `$${amount.toFixed(6)}`;
+  return formatMoneyFixed2(value);
 }
 
-function formatMoneyFixed4(value?: number | null): string {
-  return `$${(value ?? 0).toFixed(4)}`;
+function formatMoneyFixed2(value?: number | null): string {
+  return `$${(value ?? 0).toFixed(2)}`;
 }
 
 function formatBytes(bytes?: number | null): string {

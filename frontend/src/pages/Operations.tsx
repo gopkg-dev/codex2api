@@ -322,8 +322,8 @@ function IPStatsCard({
 
         {stats.length > 0 ? (
           <div className="overflow-x-auto rounded-lg border border-border">
-            <div className="min-w-[860px]">
-              <div className="grid grid-cols-[minmax(160px,1.5fr)_minmax(80px,.8fr)_repeat(5,minmax(92px,1fr))] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
+            <div className="min-w-[680px] sm:min-w-full">
+              <div className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
                 <div>IP</div>
                 <div>状态</div>
                 <div className="text-right">{t('ops.ipStatsRequests')}</div>
@@ -334,7 +334,7 @@ function IPStatsCard({
               </div>
               <div className="divide-y divide-border">
                 {stats.map((item) => (
-                  <div key={item.ip} className="grid grid-cols-[minmax(160px,1.5fr)_minmax(80px,.8fr)_repeat(5,minmax(92px,1fr))] items-center px-3 py-2 text-sm">
+                  <div key={item.ip} className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] items-center px-3 py-2 text-sm">
                     <div className="truncate font-medium text-foreground" title={item.ip}>{item.ip}</div>
                     <div><IPStatusBadge status={item.status} /></div>
                     <div className="text-right tabular-nums text-foreground">{formatNumber(item.requests)}</div>
