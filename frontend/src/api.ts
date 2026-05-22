@@ -217,6 +217,13 @@ export const api = {
     requestPublic<ChartAggregation>(
       `/api/public/chart-data?start=${encodeURIComponent(params.start)}&end=${encodeURIComponent(params.end)}&bucket_minutes=${params.bucketMinutes}`,
     ),
+  getPublicIPBans: (params?: { ip?: string }) => {
+    const search = new URLSearchParams();
+    const ip = params?.ip?.trim();
+    if (ip) search.set("ip", ip);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return requestPublic<IPBansResponse>(`/api/public/ip-bans${suffix}`);
+  },
   getStats: () => request<StatsResponse>("/stats"),
   getAccounts: () => request<AccountsResponse>("/accounts"),
   addAccount: (data: AddAccountRequest) =>
@@ -510,10 +517,17 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(data),
     }),
-  getIPBans: (includeInactive = true) =>
-    request<IPBansResponse>(
-      `/ip-bans?include_inactive=${includeInactive ? "1" : "0"}`,
-    ),
+  getIPBans: (
+    includeInactive = true,
+    params?: { page?: number; pageSize?: number },
+  ) => {
+    const search = new URLSearchParams({
+      include_inactive: includeInactive ? "1" : "0",
+    });
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.pageSize) search.set("page_size", String(params.pageSize));
+    return request<IPBansResponse>(`/ip-bans?${search.toString()}`);
+  },
   createIPBan: (data: {
     ip: string;
     reason?: string;
@@ -521,6 +535,21 @@ export const api = {
     expires_in_minutes?: number;
   }) =>
     request<{ ban: IPBansResponse["bans"][number] }>("/ip-bans", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  createIPBansBatch: (data: {
+    ips: string[];
+    reason?: string;
+    source?: string;
+    expires_in_minutes?: number;
+  }) =>
+    request<{
+      bans: IPBansResponse["bans"];
+      errors: Array<{ ip: string; error: string }>;
+      created: number;
+      error_count: number;
+    }>("/ip-bans/batch", {
       method: "POST",
       body: JSON.stringify(data),
     }),

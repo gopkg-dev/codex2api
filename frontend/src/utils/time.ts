@@ -1,5 +1,14 @@
 import i18n from '../i18n'
 
+const TIMEZONE_SUFFIX_RE = /(Z|[+-]\d{2}:?\d{2})$/i
+
+export function parseChartBucketDate(bucket?: string | null): Date {
+  const value = bucket?.trim() ?? ''
+  if (!value) return new Date(Number.NaN)
+  const normalized = value.includes('T') && !TIMEZONE_SUFFIX_RE.test(value) ? `${value}Z` : value
+  return new Date(normalized)
+}
+
 export interface RelativeTimeOptions {
   variant?: 'long' | 'compact'
   includeSeconds?: boolean

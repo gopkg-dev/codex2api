@@ -2,7 +2,10 @@ package admin
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"net/http"
+	"net/netip"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -106,6 +109,63 @@ func (h *Handler) getLatestPublicAPIKey(ctx context.Context) (string, error) {
 // GetPublicChartData 返回公开首页图表聚合数据。
 func (h *Handler) GetPublicChartData(c *gin.Context) {
 	h.GetChartData(c)
+}
+
+// GetPublicIPBans 返回公开首页 IP 黑名单查询数据。
+func (h *Handler) GetPublicIPBans(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+
+	queryIP := strings.TrimSpace(c.Query("ip"))
+	if queryIP != "" {
+		addr, err := netip.ParseAddr(queryIP)
+		if err != nil {
+			c.JSON(http.StatusOK, listIPBansResponse{
+				Bans:     []ipBanResponse{},
+				Total:    0,
+				Page:     1,
+				PageSize: 20,
+			})
+			return
+		}
+		row, err := h.db.GetIPBanByIP(ctx, addr.String())
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				c.JSON(http.StatusOK, listIPBansResponse{
+					Bans:     []ipBanResponse{},
+					Total:    0,
+					Page:     1,
+					PageSize: 20,
+				})
+				return
+			}
+			writeInternalError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, listIPBansResponse{
+			Bans:     []ipBanResponse{ipBanToResponse(*row)},
+			Total:    1,
+			Page:     1,
+			PageSize: 20,
+		})
+		return
+	}
+
+	pageResult, err := h.db.ListIPBansPaged(ctx, true, 1, 20)
+	if err != nil {
+		writeInternalError(c, err)
+		return
+	}
+	resp := listIPBansResponse{
+		Bans:     make([]ipBanResponse, 0, len(pageResult.Bans)),
+		Total:    pageResult.Total,
+		Page:     pageResult.Page,
+		PageSize: pageResult.PageSize,
+	}
+	for _, row := range pageResult.Bans {
+		resp.Bans = append(resp.Bans, ipBanToResponse(row))
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func buildPublicMaintenanceRoutes(maintenance proxy.APIMaintenanceConfig) []publicMaintenanceRouteResponse {

@@ -190,6 +190,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/branding", h.GetBranding)
 	r.GET("/api/public/home", h.GetPublicHome)
 	r.GET("/api/public/chart-data", h.GetPublicChartData)
+	r.GET("/api/public/ip-bans", h.GetPublicIPBans)
 
 	// 首次初始化端点（无需鉴权，仅在系统未配置 ADMIN_SECRET 时可用）
 	// 这两个端点必须注册在 adminAuthMiddleware 之外，否则会被 fail-closed 拦截。
@@ -246,6 +247,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.PUT("/settings", h.UpdateSettings)
 	api.GET("/ip-bans", h.ListIPBans)
 	api.POST("/ip-bans", h.CreateIPBan)
+	api.POST("/ip-bans/batch", h.CreateIPBansBatch)
 	api.POST("/ip-bans/:id/unban", h.UnbanIPBan)
 	api.DELETE("/ip-bans/:id", h.DeleteIPBan)
 	api.POST("/settings/image-storage/test", h.TestImageStorageConnection)
@@ -3904,7 +3906,10 @@ type ipBanResponse struct {
 }
 
 type listIPBansResponse struct {
-	Bans []ipBanResponse `json:"bans"`
+	Bans     []ipBanResponse `json:"bans"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
 }
 
 type createIPBanReq struct {
@@ -3912,6 +3917,25 @@ type createIPBanReq struct {
 	Reason           string `json:"reason"`
 	Source           string `json:"source"`
 	ExpiresInMinutes int    `json:"expires_in_minutes"`
+}
+
+type createIPBansBatchReq struct {
+	IPs              []string `json:"ips"`
+	Reason           string   `json:"reason"`
+	Source           string   `json:"source"`
+	ExpiresInMinutes int      `json:"expires_in_minutes"`
+}
+
+type createIPBanBatchError struct {
+	IP    string `json:"ip"`
+	Error string `json:"error"`
+}
+
+type createIPBansBatchResponse struct {
+	Bans       []ipBanResponse         `json:"bans"`
+	Errors     []createIPBanBatchError `json:"errors"`
+	Created    int                     `json:"created"`
+	ErrorCount int                     `json:"error_count"`
 }
 
 func ipBanToResponse(row database.IPBanRow) ipBanResponse {
@@ -3934,6 +3958,27 @@ func ipBanToResponse(row database.IPBanRow) ipBanResponse {
 		resp.LastTriggeredAt = row.LastTriggeredAt.Time.Format(time.RFC3339)
 	}
 	return resp
+}
+
+func normalizeIPBanBatchInput(values []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		for _, field := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == '\n' || r == '\r' || r == '\t' || r == ' ' || r == ',' || r == ';'
+		}) {
+			value := strings.TrimSpace(field)
+			if value == "" || strings.HasPrefix(value, "#") {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func ipBansToRuntimeRules(rows []database.IPBanRow) []proxy.IPBanRule {
@@ -3968,15 +4013,32 @@ func (h *Handler) reloadIPBanRuntime(ctx context.Context) {
 
 func (h *Handler) ListIPBans(c *gin.Context) {
 	includeInactive := c.Query("include_inactive") == "1" || c.Query("include_inactive") == "true"
+	page := 1
+	if pageStr := c.Query("page"); pageStr != "" {
+		if parsed, err := strconv.Atoi(pageStr); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	pageSize := 20
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if parsed, err := strconv.Atoi(pageSizeStr); err == nil && parsed > 0 && parsed <= 200 {
+			pageSize = parsed
+		}
+	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
-	rows, err := h.db.ListIPBans(ctx, includeInactive)
+	pageResult, err := h.db.ListIPBansPaged(ctx, includeInactive, page, pageSize)
 	if err != nil {
 		writeInternalError(c, err)
 		return
 	}
-	resp := listIPBansResponse{Bans: make([]ipBanResponse, 0, len(rows))}
-	for _, row := range rows {
+	resp := listIPBansResponse{
+		Bans:     make([]ipBanResponse, 0, len(pageResult.Bans)),
+		Total:    pageResult.Total,
+		Page:     pageResult.Page,
+		PageSize: pageResult.PageSize,
+	}
+	for _, row := range pageResult.Bans {
 		resp.Bans = append(resp.Bans, ipBanToResponse(row))
 	}
 	c.JSON(http.StatusOK, resp)
@@ -4010,6 +4072,58 @@ func (h *Handler) CreateIPBan(c *gin.Context) {
 	}
 	h.reloadIPBanRuntime(ctx)
 	c.JSON(http.StatusOK, gin.H{"ban": ipBanToResponse(*row)})
+}
+
+func (h *Handler) CreateIPBansBatch(c *gin.Context) {
+	var req createIPBansBatchReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		writeError(c, http.StatusBadRequest, "请求格式错误")
+		return
+	}
+	ips := normalizeIPBanBatchInput(req.IPs)
+	if len(ips) == 0 {
+		writeError(c, http.StatusBadRequest, "请至少填写一个 IP")
+		return
+	}
+	expiresAt := sql.NullTime{}
+	if req.ExpiresInMinutes > 0 {
+		if req.ExpiresInMinutes > 10080 {
+			req.ExpiresInMinutes = 10080
+		}
+		expiresAt = sql.NullTime{Time: time.Now().Add(time.Duration(req.ExpiresInMinutes) * time.Minute), Valid: true}
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	resp := createIPBansBatchResponse{
+		Bans:   []ipBanResponse{},
+		Errors: []createIPBanBatchError{},
+	}
+	for _, ip := range ips {
+		row, err := h.db.CreateIPBan(ctx, database.IPBanInput{
+			IP:        ip,
+			Reason:    req.Reason,
+			Source:    req.Source,
+			ExpiresAt: expiresAt,
+			Enabled:   true,
+		})
+		if err != nil {
+			resp.Errors = append(resp.Errors, createIPBanBatchError{IP: ip, Error: err.Error()})
+			continue
+		}
+		resp.Bans = append(resp.Bans, ipBanToResponse(*row))
+	}
+	resp.Created = len(resp.Bans)
+	resp.ErrorCount = len(resp.Errors)
+	if resp.Created > 0 {
+		h.reloadIPBanRuntime(ctx)
+	}
+	if resp.Created == 0 && resp.ErrorCount > 0 {
+		c.JSON(http.StatusBadRequest, resp)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 func (h *Handler) UnbanIPBan(c *gin.Context) {

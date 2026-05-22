@@ -2554,9 +2554,9 @@ func (db *DB) GetChartAggregation(ctx context.Context, start, end time.Time, buc
 	timelineQuery := `
 	SELECT
 		TO_CHAR(
-			date_trunc('minute', created_at)
-			- (EXTRACT(MINUTE FROM created_at)::int % $3) * INTERVAL '1 minute',
-			'YYYY-MM-DD"T"HH24:MI:SS'
+			date_trunc('minute', created_at AT TIME ZONE 'UTC')
+			- (EXTRACT(MINUTE FROM created_at AT TIME ZONE 'UTC')::int % $3) * INTERVAL '1 minute',
+			'YYYY-MM-DD"T"HH24:MI:SS"Z"'
 		) AS bucket,
 		COUNT(*)                              AS requests,
 		COALESCE(AVG(duration_ms), 0)         AS avg_latency,
@@ -4047,9 +4047,9 @@ func (db *DB) GetAccountEventTrend(ctx context.Context, start, end time.Time, bu
 	query := `
 	SELECT
 		TO_CHAR(
-			date_trunc('minute', created_at)
-			- (EXTRACT(MINUTE FROM created_at)::int % $3) * INTERVAL '1 minute',
-			'YYYY-MM-DD"T"HH24:MI:SS'
+			date_trunc('minute', created_at AT TIME ZONE 'UTC')
+			- (EXTRACT(MINUTE FROM created_at AT TIME ZONE 'UTC')::int % $3) * INTERVAL '1 minute',
+			'YYYY-MM-DD"T"HH24:MI:SS"Z"'
 		) AS bucket,
 		COALESCE(SUM(CASE WHEN event_type = 'added' THEN 1 ELSE 0 END), 0) AS added,
 		COALESCE(SUM(CASE WHEN event_type = 'deleted' AND source = 'manual' THEN 1 ELSE 0 END), 0) AS deleted

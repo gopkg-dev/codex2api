@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -368,6 +369,88 @@ func TestApplyCodexRequestHeadersPreservesOpenCodeClient(t *testing.T) {
 	}
 	if got := req.Header.Get("Originator"); got != "opencode" {
 		t.Fatalf("Originator = %q, want %q", got, "opencode")
+	}
+}
+
+func TestApplyOpenAIResponsesForwardHeadersForwardsSafeHeaders(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	downstreamHeaders := http.Header{
+		"User-Agent":          []string{"custom-client/1.0"},
+		"X-Request-Id":        []string{"req-123"},
+		"OpenAI-Organization": []string{"org-123"},
+		"Authorization":       []string{"Bearer downstream-key"},
+		"Content-Type":        []string{"text/plain"},
+		"Cookie":              []string{"session=secret"},
+		"Accept-Encoding":     []string{"gzip"},
+	}
+
+	applyOpenAIResponsesForwardHeaders(req, downstreamHeaders)
+
+	for name, want := range map[string]string{
+		"User-Agent":          "custom-client/1.0",
+		"X-Request-Id":        "req-123",
+		"OpenAI-Organization": "org-123",
+	} {
+		if got := req.Header.Get(name); got != want {
+			t.Fatalf("%s = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"Authorization", "Content-Type", "Cookie", "Accept-Encoding"} {
+		if got := req.Header.Get(name); got != "" {
+			t.Fatalf("%s = %q, want empty", name, got)
+		}
+	}
+}
+
+func TestExecuteOpenAIResponsesRequestForwardsUserAgentAndSafeHeaders(t *testing.T) {
+	var gotHeaders http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeaders = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	acc := &auth.Account{
+		DBID:         9876,
+		UpstreamType: auth.UpstreamOpenAIResponses,
+		BaseURL:      server.URL,
+		APIKey:       "upstream-key",
+	}
+	downstreamHeaders := http.Header{
+		"User-Agent":      []string{"custom-client/2.0"},
+		"X-Request-Id":    []string{"req-456"},
+		"Authorization":   []string{"Bearer downstream-key"},
+		"Content-Type":    []string{"text/plain"},
+		"X-Api-Key":       []string{"downstream-x-key"},
+		"Accept-Encoding": []string{"gzip"},
+	}
+
+	resp, err := ExecuteOpenAIResponsesRequest(context.Background(), acc, []byte(`{"model":"gpt-5.5"}`), "", downstreamHeaders)
+	if err != nil {
+		t.Fatalf("ExecuteOpenAIResponsesRequest() error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := gotHeaders.Get("User-Agent"); got != "custom-client/2.0" {
+		t.Fatalf("User-Agent = %q", got)
+	}
+	if got := gotHeaders.Get("X-Request-Id"); got != "req-456" {
+		t.Fatalf("X-Request-Id = %q", got)
+	}
+	if got := gotHeaders.Get("Authorization"); got != "Bearer upstream-key" {
+		t.Fatalf("Authorization = %q", got)
+	}
+	if got := gotHeaders.Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if got := gotHeaders.Get("X-Api-Key"); got != "" {
+		t.Fatalf("X-Api-Key = %q, want empty", got)
 	}
 }
 

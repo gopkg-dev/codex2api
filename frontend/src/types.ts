@@ -455,6 +455,9 @@ export interface IPBan {
 
 export interface IPBansResponse {
   bans: IPBan[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface PromptFilterMatch {

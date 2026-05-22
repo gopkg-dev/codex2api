@@ -457,6 +457,54 @@ func TestCreateIPBanRejectsCIDR(t *testing.T) {
 	}
 }
 
+func TestCreateIPBanUpsertsAndIncrementsHitCount(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	ip := "203.0.113.88"
+	if _, err := db.CreateIPBan(ctx, IPBanInput{
+		IP:      ip,
+		Reason:  IPBanReasonManual,
+		Source:  IPBanSourceManual,
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateIPBan manual 返回错误: %v", err)
+	}
+	if _, err := db.RecordAutoIPBan(ctx, ip, IPBanReasonQPS, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("RecordAutoIPBan qps 返回错误: %v", err)
+	}
+	row, err := db.RecordAutoIPBan(ctx, ip, IPBanReasonRPM, time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatalf("RecordAutoIPBan rpm 返回错误: %v", err)
+	}
+
+	if row.HitCount != 3 {
+		t.Fatalf("hit_count = %d, want 3", row.HitCount)
+	}
+	if row.Reason != IPBanReasonRPM || row.Source != IPBanSourceAuto {
+		t.Fatalf("reason/source = %s/%s, want rpm_limit/auto", row.Reason, row.Source)
+	}
+	if row.UnbannedAt.Valid {
+		t.Fatalf("unbanned_at valid = true, want false")
+	}
+	if !row.ExpiresAt.Valid || !row.LastTriggeredAt.Valid || !row.Enabled {
+		t.Fatalf("row state = %#v, want enabled with expires_at and last_triggered_at", row)
+	}
+
+	bans, err := db.ListIPBans(ctx, true)
+	if err != nil {
+		t.Fatalf("ListIPBans 返回错误: %v", err)
+	}
+	if len(bans) != 1 || bans[0].IP != ip {
+		t.Fatalf("bans = %#v, want single upserted row", bans)
+	}
+}
+
 func TestUsageLogModeErrorsSkipsSuccessfulLogs(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 
@@ -619,6 +667,42 @@ func TestUsageErrorSummaryAndFilters(t *testing.T) {
 	}
 	if page.Total != 1 || len(page.Logs) != 1 || page.Logs[0].StatusCode != 500 {
 		t.Fatalf("5xx page = total %d len %d first %+v", page.Total, len(page.Logs), page.Logs)
+	}
+}
+
+func TestGetChartAggregationReturnsUTCBuckets(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	_, err = db.conn.ExecContext(ctx, `
+		INSERT INTO usage_logs (
+			endpoint, model, status_code, duration_ms,
+			input_tokens, output_tokens, reasoning_tokens, cached_tokens, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, "/v1/responses", "gpt-5.4", 200, 100, 1000, 20, 5, 300, "2026-05-22 13:08:00")
+	if err != nil {
+		t.Fatalf("insert usage log: %v", err)
+	}
+
+	beijing := time.FixedZone("CST", 8*60*60)
+	start := time.Date(2026, 5, 22, 21, 0, 0, 0, beijing)
+	end := time.Date(2026, 5, 22, 21, 30, 0, 0, beijing)
+	charts, err := db.GetChartAggregation(ctx, start, end, 30)
+	if err != nil {
+		t.Fatalf("GetChartAggregation 返回错误: %v", err)
+	}
+	if len(charts.Timeline) != 1 {
+		t.Fatalf("timeline len = %d, want 1", len(charts.Timeline))
+	}
+	if got, want := charts.Timeline[0].Bucket, "2026-05-22T13:00:00Z"; got != want {
+		t.Fatalf("bucket = %q, want %q", got, want)
 	}
 }
 

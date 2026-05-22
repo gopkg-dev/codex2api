@@ -19,6 +19,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import StateShell from './StateShell'
 import type { ChartAggregation } from '../types'
 import { TIME_RANGE_OPTIONS, getBucketConfig, type TimeRangeKey } from '../lib/timeRange'
+import { parseChartBucketDate } from '../utils/time'
 
 interface DashboardUsageChartsProps {
   chartData: ChartAggregation | null
@@ -86,7 +87,7 @@ export default function DashboardUsageCharts({
     const totalRequests = serverData.timeline.reduce((sum, p) => sum + p.requests, 0)
 
     const timelineData: TimelinePoint[] = serverData.timeline.map((point) => {
-      const d = new Date(point.bucket)
+      const d = parseChartBucketDate(point.bucket)
       return {
         label: useFullDate ? formatDateLabel(d, bucketMinutes) : formatMinuteLabel(d),
         fullLabel: formatFullLabel(d, bucketMinutes),

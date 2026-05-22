@@ -40,6 +40,13 @@ type IPBanInput struct {
 	Enabled   bool
 }
 
+type IPBanPage struct {
+	Bans     []IPBanRow
+	Total    int64
+	Page     int
+	PageSize int
+}
+
 func normalizeIPBanReason(value string) string {
 	value = strings.TrimSpace(value)
 	switch value {
@@ -242,6 +249,71 @@ func (db *DB) ListIPBans(ctx context.Context, includeInactive bool) ([]IPBanRow,
 		result = append(result, *row)
 	}
 	return result, rows.Err()
+}
+
+func (db *DB) ListIPBansPaged(ctx context.Context, includeInactive bool, page, pageSize int) (*IPBanPage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+
+	where := ""
+	args := []interface{}{}
+	if !includeInactive {
+		if db.isSQLite() {
+			where = `WHERE enabled = ? AND unbanned_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`
+		} else {
+			where = `WHERE enabled = $1 AND unbanned_at IS NULL AND (expires_at IS NULL OR expires_at > $2)`
+		}
+		args = append(args, true, db.timeArg(time.Now()))
+	}
+
+	var total int64
+	countQuery := `SELECT COUNT(*) FROM ip_bans ` + where
+	if err := db.conn.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	offset := (page - 1) * pageSize
+	query := `
+		SELECT id, ip, reason, source, banned_at, expires_at, unbanned_at, hit_count, last_triggered_at, enabled
+		FROM ip_bans ` + where + `
+		ORDER BY ip ASC, id ASC
+	`
+	queryArgs := append([]interface{}{}, args...)
+	if db.isSQLite() {
+		query += ` LIMIT ? OFFSET ?`
+	} else {
+		query += fmt.Sprintf(` LIMIT $%d OFFSET $%d`, len(queryArgs)+1, len(queryArgs)+2)
+	}
+	queryArgs = append(queryArgs, pageSize, offset)
+
+	rows, err := db.conn.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []IPBanRow{}
+	for rows.Next() {
+		row, err := db.scanIPBanRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, *row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &IPBanPage{
+		Bans:     result,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
 }
 
 func (db *DB) UnbanIPBan(ctx context.Context, id int64) error {

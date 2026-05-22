@@ -76,6 +76,13 @@ func sqliteTimeParam(value time.Time) string {
 	return value.UTC().Format("2006-01-02 15:04:05")
 }
 
+func utcBucketString(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 func (db *DB) timeRangeArgs(start, end time.Time) (interface{}, interface{}) {
 	if db != nil && db.isSQLite() {
 		return sqliteTimeParam(start), sqliteTimeParam(end)

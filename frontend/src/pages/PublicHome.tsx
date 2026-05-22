@@ -24,6 +24,7 @@ import {
   Terminal,
   Users,
   Wrench,
+  Search,
 } from "lucide-react";
 import {
   CartesianGrid,
@@ -44,6 +45,7 @@ import {
 } from "../lib/timeRange";
 import type {
   ChartAggregation,
+  IPBan,
   IPStatsWindow,
   IPUsageStat,
   PublicAccountPoolStats,
@@ -53,9 +55,16 @@ import type {
 } from "../types";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import Modal from "../components/Modal";
 import ToastNotice from "../components/ToastNotice";
 import { useToast } from "../hooks/useToast";
+import { parseChartBucketDate } from "../utils/time";
 
 const PUBLIC_REFRESH_INTERVAL_SECONDS = 5;
 const PUBLIC_TIME_RANGES: TimeRangeKey[] = ["1h", "6h", "24h", "7d"];
@@ -70,6 +79,8 @@ const QQ_GROUP_NUMBER = "1054851130";
 const QQ_GROUP_URL = "https://qm.qq.com/q/PphhfxKPee";
 const CC_SWITCH_PROTOCOL_ERROR =
   "CC-Switch 未安装或协议处理程序未注册。请先安装 CC-Switch 或手动复制 API 密钥。";
+const CLAUDE_CC_SWITCH_IMPORT_TIP =
+  "导入成功后需要手动设置：高级选项 -> API 格式 -> 选择 OpenAI Responses API。";
 const PUBLIC_MAINTENANCE_ROUTE_META: Record<
   string,
   { label: string; order: number }
@@ -100,11 +111,18 @@ export default function PublicHome() {
   const [ipStatsOpen, setIPStatsOpen] = useState(false);
   const [ipStatsWindow, setIPStatsWindow] = useState<IPStatsWindow>("5m");
   const [ipStatsLoading, setIPStatsLoading] = useState(false);
+  const [ipBansOpen, setIPBansOpen] = useState(false);
+  const [ipBans, setIPBans] = useState<IPBan[]>([]);
+  const [ipBansTotal, setIPBansTotal] = useState(0);
+  const [ipBanQuery, setIPBanQuery] = useState("");
+  const [ipBansLoading, setIPBansLoading] = useState(false);
   const [docsInitialTab, setDocsInitialTab] =
     useState<PublicDocsTopTab>("codex");
   const chartAbort = useRef<AbortController | null>(null);
   const copyResetTimer = useRef<number | null>(null);
   const ccSwitchFallbackTimer = useRef<number | null>(null);
+  const ccSwitchPendingSuccessTip = useRef("");
+  const ccSwitchProtocolLaunched = useRef(false);
   const refreshInFlight = useRef(false);
   const ipStatsWindowRef = useRef<IPStatsWindow>("5m");
   const overviewRequestSeq = useRef(0);
@@ -169,6 +187,42 @@ export default function PublicHome() {
     void reload();
   }, [reload]);
 
+  const showPendingCcSwitchSuccessTip = useCallback(() => {
+    if (
+      !ccSwitchPendingSuccessTip.current ||
+      !ccSwitchProtocolLaunched.current ||
+      document.visibilityState !== "visible" ||
+      !document.hasFocus()
+    ) {
+      return;
+    }
+    showToast(ccSwitchPendingSuccessTip.current);
+    ccSwitchPendingSuccessTip.current = "";
+  }, [showToast]);
+
+  useEffect(() => {
+    const markCcSwitchProtocolLaunched = () => {
+      if (ccSwitchFallbackTimer.current !== null) {
+        ccSwitchProtocolLaunched.current = true;
+      }
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        markCcSwitchProtocolLaunched();
+        return;
+      }
+      showPendingCcSwitchSuccessTip();
+    };
+    window.addEventListener("blur", markCcSwitchProtocolLaunched);
+    window.addEventListener("focus", showPendingCcSwitchSuccessTip);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("blur", markCcSwitchProtocolLaunched);
+      window.removeEventListener("focus", showPendingCcSwitchSuccessTip);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [showPendingCcSwitchSuccessTip]);
+
   useEffect(() => {
     return () => {
       if (copyResetTimer.current !== null) {
@@ -177,6 +231,8 @@ export default function PublicHome() {
       if (ccSwitchFallbackTimer.current !== null) {
         window.clearTimeout(ccSwitchFallbackTimer.current);
       }
+      ccSwitchPendingSuccessTip.current = "";
+      ccSwitchProtocolLaunched.current = false;
     };
   }, []);
 
@@ -219,7 +275,7 @@ export default function PublicHome() {
         point.output_tokens +
         point.reasoning_tokens +
         point.cached_tokens;
-      const date = new Date(point.bucket);
+      const date = parseChartBucketDate(point.bucket);
       return {
         label: formatChartLabel(date, timeRange),
         fullLabel: date.toLocaleString(),
@@ -279,17 +335,47 @@ export default function PublicHome() {
     },
     [loadOverview],
   );
-  const showCcSwitchFallback = useCallback(() => {
+  const loadPublicIPBans = useCallback(
+    async (ip = ipBanQuery) => {
+      setIPBansLoading(true);
+      setError("");
+      try {
+        const result = await api.getPublicIPBans({ ip });
+        setIPBans(result.bans);
+        setIPBansTotal(result.total);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "加载失败");
+      } finally {
+        setIPBansLoading(false);
+      }
+    },
+    [ipBanQuery],
+  );
+  const openIPBans = useCallback(() => {
+    setIPBansOpen(true);
+    setIPBanQuery("");
+    void loadPublicIPBans("");
+  }, [loadPublicIPBans]);
+  const handleCcSwitchImport = useCallback((successTip = "") => {
+    ccSwitchPendingSuccessTip.current = successTip;
+    ccSwitchProtocolLaunched.current = false;
     if (ccSwitchFallbackTimer.current !== null) {
       window.clearTimeout(ccSwitchFallbackTimer.current);
     }
     ccSwitchFallbackTimer.current = window.setTimeout(() => {
-      if (document.visibilityState === "visible" && document.hasFocus()) {
+      if (
+        !ccSwitchProtocolLaunched.current &&
+        document.visibilityState === "visible" &&
+        document.hasFocus()
+      ) {
+        ccSwitchPendingSuccessTip.current = "";
         showToast(CC_SWITCH_PROTOCOL_ERROR, "error");
+      } else {
+        showPendingCcSwitchSuccessTip();
       }
       ccSwitchFallbackTimer.current = null;
     }, 1200);
-  }, [showToast]);
+  }, [showPendingCcSwitchSuccessTip, showToast]);
 
   return (
     <main className="min-h-screen bg-background px-4 py-5 text-foreground sm:px-6 lg:px-8">
@@ -403,7 +489,7 @@ export default function PublicHome() {
           codexCcSwitchUrl={codexCcSwitchUrl}
           claudeCcSwitchUrl={claudeCcSwitchUrl}
           ccSwitchDisabled={!latestKey}
-          onCcSwitchImport={showCcSwitchFallback}
+          onCcSwitchImport={handleCcSwitchImport}
         />
         <PublicUsageDocsModal
           show={docsOpen}
@@ -422,6 +508,16 @@ export default function PublicHome() {
           onWindowChange={changeIPStatsWindow}
           loading={loading || ipStatsLoading}
           onClose={() => setIPStatsOpen(false)}
+        />
+        <PublicIPBansModal
+          show={ipBansOpen}
+          bans={ipBans}
+          total={ipBansTotal}
+          query={ipBanQuery}
+          loading={ipBansLoading}
+          onQueryChange={setIPBanQuery}
+          onSearch={() => void loadPublicIPBans()}
+          onClose={() => setIPBansOpen(false)}
         />
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -674,6 +770,7 @@ export default function PublicHome() {
             loading={loading}
             ipStatsTotal={ipStatsTotal}
             onOpenIPStats={() => setIPStatsOpen(true)}
+            onOpenIPBans={openIPBans}
           />
         </section>
       </div>
@@ -880,6 +977,145 @@ function PublicIPStatsModal({
   );
 }
 
+function PublicIPBansModal({
+  show,
+  bans,
+  total,
+  query,
+  loading,
+  onQueryChange,
+  onSearch,
+  onClose,
+}: {
+  show: boolean;
+  bans: IPBan[];
+  total: number;
+  query: string;
+  loading: boolean;
+  onQueryChange: (value: string) => void;
+  onSearch: () => void;
+  onClose: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!show) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [show]);
+
+  return (
+    <Modal
+      show={show}
+      title="IP 黑名单查询"
+      onClose={onClose}
+      contentClassName="sm:max-w-6xl"
+    >
+      <div className="space-y-4">
+        <form
+          className="flex flex-col gap-2 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onSearch();
+          }}
+        >
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="输入 IP 精确查询，留空显示前 20 个"
+            className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <Button type="submit" size="sm" disabled={loading}>
+            {loading ? (
+              <RefreshCw className="size-4 animate-spin" />
+            ) : (
+              <Search className="size-4" />
+            )}
+            查询
+          </Button>
+        </form>
+
+        {loading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 5 }).map((_, index) => (
+              <div
+                key={index}
+                className="h-10 animate-pulse rounded-md bg-muted"
+              />
+            ))}
+          </div>
+        ) : bans.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <div className="min-w-[820px] sm:min-w-full">
+              <div className="grid grid-cols-[minmax(132px,1fr)_minmax(86px,.7fr)_minmax(86px,.7fr)_minmax(130px,.95fr)_minmax(72px,.55fr)_minmax(170px,1.1fr)] gap-3 bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                <div>IP</div>
+                <div>封禁原因</div>
+                <div>状态</div>
+                <div>最后封禁时间</div>
+                <div className="text-right">封禁次数</div>
+                <div>解封/到期倒计时</div>
+              </div>
+              <div className="max-h-[52vh] divide-y divide-border overflow-y-auto">
+                {bans.slice(0, 20).map((ban) => {
+                  const status = publicIPBanStatus(ban, now);
+                  return (
+                    <div
+                      key={`${ban.ip}-${ban.last_triggered_at || ban.banned_at}`}
+                      className="grid grid-cols-[minmax(132px,1fr)_minmax(86px,.7fr)_minmax(86px,.7fr)_minmax(130px,.95fr)_minmax(72px,.55fr)_minmax(170px,1.1fr)] items-center gap-3 px-3 py-2 text-sm"
+                    >
+                      <div
+                        className="truncate font-mono text-foreground"
+                        title={ban.ip}
+                      >
+                        {ban.ip}
+                      </div>
+                      <div>{publicIPBanReasonLabel(ban.reason)}</div>
+                      <div>
+                        <span
+                          className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold ${status.className}`}
+                        >
+                          {status.label}
+                        </span>
+                      </div>
+                      <div className="tabular-nums text-foreground">
+                        {formatPublicDate(
+                          ban.last_triggered_at || ban.banned_at,
+                        )}
+                      </div>
+                      <div className="text-right tabular-nums text-foreground">
+                        {formatInteger(ban.hit_count)}
+                      </div>
+                      <div
+                        className="tabular-nums text-foreground"
+                        title={formatPublicDate(
+                          ban.unbanned_at || ban.expires_at,
+                        )}
+                      >
+                        {publicIPBanReleaseCountdownLabel(ban, now)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            {total > bans.length ? (
+              <div className="border-t border-border bg-muted/30 px-3 py-2 text-right text-xs text-muted-foreground">
+                已显示前 {formatInteger(Math.min(20, bans.length))} 个，共{" "}
+                {formatInteger(total)} 条记录
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex min-h-32 items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
+            未找到黑名单记录
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 function IPStatusBadge({ status }: { status?: string }) {
   const config = getIPStatusConfig(status);
   return (
@@ -918,6 +1154,77 @@ function getIPStatusConfig(status?: string): {
         className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
       };
   }
+}
+
+function publicIPBanReasonLabel(reason?: string): string {
+  switch (reason) {
+    case "qps_limit":
+      return "QPS 触发";
+    case "rpm_limit":
+      return "RPM 触发";
+    default:
+      return "手动封禁";
+  }
+}
+
+function formatPublicDate(value?: string): string {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function parsePublicDateTime(value?: string): number | null {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function formatPublicDuration(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds <= 0) return "刚刚";
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}天${hours}小时`;
+  if (hours > 0) return `${hours}小时${minutes}分钟`;
+  if (minutes > 0) return `${minutes}分钟${seconds}秒`;
+  return `${seconds}秒`;
+}
+
+function publicIPBanStatus(ban: IPBan, now: number) {
+  if (ban.unbanned_at) {
+    return {
+      label: "已解封",
+      className:
+        "border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-300",
+    };
+  }
+  const expiresAt = parsePublicDateTime(ban.expires_at);
+  if (expiresAt !== null && expiresAt <= now) {
+    return {
+      label: "已解封",
+      className:
+        "border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-300",
+    };
+  }
+  return {
+    label: "封禁中",
+    className:
+      "border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300",
+  };
+}
+
+function publicIPBanReleaseCountdownLabel(ban: IPBan, now: number): string {
+  const unbannedAt = parsePublicDateTime(ban.unbanned_at);
+  if (unbannedAt !== null) return `已于 ${formatPublicDate(ban.unbanned_at)} 解封`;
+  const expiresAt = parsePublicDateTime(ban.expires_at);
+  if (expiresAt !== null) {
+    if (expiresAt > now) return `剩余 ${formatPublicDuration(expiresAt - now)}`;
+    return `已于 ${formatPublicDate(ban.expires_at)} 解封`;
+  }
+  return "永久";
 }
 
 function CodexIcon({ className }: { className?: string }) {
@@ -1136,7 +1443,7 @@ function AccountPoolCard({
                 tone={accountPool?.rate_limited ? "warning" : "normal"}
               />
               <AccountPoolMiniStat
-                label="封禁"
+                label="封号"
                 value={formatInteger(accountPool?.unauthorized)}
                 tone={accountPool?.unauthorized ? "danger" : "normal"}
               />
@@ -1255,7 +1562,7 @@ function MaintenanceStatusCard({
   codexCcSwitchUrl: string;
   claudeCcSwitchUrl: string;
   ccSwitchDisabled: boolean;
-  onCcSwitchImport: () => void;
+  onCcSwitchImport: (successTip?: string) => void;
 }) {
   const routes = maintenance?.routes ?? [];
   const enabled = Boolean(maintenance?.enabled);
@@ -1354,7 +1661,10 @@ function MaintenanceStatusCard({
                 disabled={ccSwitchDisabled}
                 label="导入 CC Switch"
                 icon={<ClaudeIcon className="size-4" />}
-                onImportClick={onCcSwitchImport}
+                tooltip={CLAUDE_CC_SWITCH_IMPORT_TIP}
+                onImportClick={() =>
+                  onCcSwitchImport(CLAUDE_CC_SWITCH_IMPORT_TIP)
+                }
               />
             </div>
             {allMaintenance && !loading ? (
@@ -1643,16 +1953,18 @@ function PublicDocsCcSwitchButton({
   disabled,
   label,
   icon,
+  tooltip,
   onImportClick,
 }: {
   href: string;
   disabled: boolean;
   label: string;
   icon: ReactNode;
+  tooltip?: string;
   onImportClick: () => void;
 }) {
-  if (disabled) {
-    return (
+  const trigger = disabled ? (
+    <span className="inline-flex w-fit">
       <Button
         type="button"
         variant="outline"
@@ -1663,10 +1975,8 @@ function PublicDocsCcSwitchButton({
         {icon}
         {label}
       </Button>
-    );
-  }
-
-  return (
+    </span>
+  ) : (
     <Button
       asChild
       type="button"
@@ -1681,6 +1991,25 @@ function PublicDocsCcSwitchButton({
       </a>
     </Button>
   );
+
+  if (tooltip) {
+    return (
+      <TooltipProvider>
+        <UITooltip>
+          <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+          <TooltipContent
+            side="top"
+            sideOffset={8}
+            className="max-w-80 whitespace-normal text-left leading-relaxed"
+          >
+            {tooltip}
+          </TooltipContent>
+        </UITooltip>
+      </TooltipProvider>
+    );
+  }
+
+  return trigger;
 }
 
 function PublicDocsHint({ children }: { children: ReactNode }) {
@@ -1791,11 +2120,13 @@ function ModelStatsCard({
   loading,
   ipStatsTotal,
   onOpenIPStats,
+  onOpenIPBans,
 }: {
   stats: UsageModelStat[];
   loading: boolean;
   ipStatsTotal: number;
   onOpenIPStats: () => void;
+  onOpenIPBans: () => void;
 }) {
   const maxRequests = Math.max(1, ...stats.map((item) => item.requests));
   return (
@@ -1810,19 +2141,31 @@ function ModelStatsCard({
               按请求量和计费聚合
             </p>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 shrink-0 px-2 text-xs"
-            onClick={onOpenIPStats}
-          >
-            <RankingIcon className="size-3.5" />
-            IP 排行榜
-            <span className="font-mono tabular-nums">
-              {formatInteger(ipStatsTotal)}
-            </span>
-          </Button>
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={onOpenIPStats}
+            >
+              <RankingIcon className="size-3.5" />
+              IP 排行榜
+              <span className="font-mono tabular-nums">
+                {formatInteger(ipStatsTotal)}
+              </span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-xs"
+              onClick={onOpenIPBans}
+            >
+              <Search className="size-3.5" />
+              IP 黑名单查询
+            </Button>
+          </div>
         </div>
         {loading ? (
           <div className="min-h-0 flex-1 space-y-3 overflow-hidden">

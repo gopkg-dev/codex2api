@@ -1074,17 +1074,6 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 			return
 		}
 
-		if rl.enhanced != nil && !rl.enhanced.Allow() {
-			c.JSON(http.StatusTooManyRequests, gin.H{
-				"error": gin.H{
-					"message": "请求过于频繁，请稍后重试",
-					"type":    "rate_limit_error",
-					"code":    "rate_limit_exceeded",
-				},
-			})
-			c.Abort()
-			return
-		}
 		clientIP := rateLimitClientIP(c)
 		if rateLimitIsV1Path(path) {
 			runtimeSettings := CurrentRuntimeSettings()
@@ -1136,6 +1125,17 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
+		}
+		if rl.enhanced != nil && !rl.enhanced.Allow() {
+			c.JSON(http.StatusTooManyRequests, gin.H{
+				"error": gin.H{
+					"message": "请求过于频繁，请稍后重试",
+					"type":    "rate_limit_error",
+					"code":    "rate_limit_exceeded",
+				},
+			})
+			c.Abort()
+			return
 		}
 		c.Next()
 	}

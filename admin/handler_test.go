@@ -433,6 +433,166 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	}
 }
 
+func TestCreateIPBansBatchAddsValidIPsAndRefreshesRuntime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	tc := cache.NewMemory(4)
+	settings := &database.SystemSettings{MaxConcurrency: 2, TestModel: "gpt-5.4", TestConcurrency: 50}
+	store := auth.NewStore(db, tc, settings)
+	rateLimiter := proxy.NewRateLimiter(0)
+	handler := NewHandler(store, db, tc, rateLimiter, "secret")
+
+	body := `{
+		"ips": ["203.0.113.50, 203.0.113.51", "203.0.113.50", "198.51.100.0/24"],
+		"reason": "manual",
+		"source": "manual",
+		"expires_in_minutes": 30
+	}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/admin/ip-bans/batch", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.CreateIPBansBatch(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload createIPBansBatchResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Created != 2 || payload.ErrorCount != 1 {
+		t.Fatalf("batch response = created %d errors %d, want 2/1: %#v", payload.Created, payload.ErrorCount, payload)
+	}
+
+	router := gin.New()
+	router.Use(rateLimiter.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	banned := httptest.NewRecorder()
+	bannedReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	bannedReq.RemoteAddr = "203.0.113.50:1234"
+	router.ServeHTTP(banned, bannedReq)
+	if banned.Code != http.StatusOK {
+		t.Fatalf("banned status = %d, want 200; body=%s", banned.Code, banned.Body.String())
+	}
+	if body := banned.Body.String(); !strings.Contains(body, "触发风控已被锁定") {
+		t.Fatalf("banned body = %s, want protocol ban message", body)
+	}
+}
+
+func TestListIPBansPaginates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	for _, ip := range []string{"203.0.113.10", "203.0.113.11", "203.0.113.12"} {
+		if _, err := db.CreateIPBan(ctx, database.IPBanInput{
+			IP:      ip,
+			Reason:  database.IPBanReasonManual,
+			Source:  database.IPBanSourceManual,
+			Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateIPBan(%s) 返回错误: %v", ip, err)
+		}
+	}
+
+	handler := &Handler{db: db}
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/api/admin/ip-bans?include_inactive=1&page=2&page_size=2", nil)
+
+	handler.ListIPBans(ginCtx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload listIPBansResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 3 || payload.Page != 2 || payload.PageSize != 2 {
+		t.Fatalf("pagination = total %d page %d page_size %d, want 3/2/2", payload.Total, payload.Page, payload.PageSize)
+	}
+	if len(payload.Bans) != 1 || payload.Bans[0].IP != "203.0.113.12" {
+		t.Fatalf("bans = %#v, want second page with 203.0.113.12", payload.Bans)
+	}
+}
+
+func TestGetPublicIPBansReturnsTopTwentyAndSupportsIPQuery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	for i := 0; i < 25; i++ {
+		ip := fmt.Sprintf("203.0.113.%d", i+1)
+		if _, err := db.CreateIPBan(ctx, database.IPBanInput{
+			IP:      ip,
+			Reason:  database.IPBanReasonManual,
+			Source:  database.IPBanSourceManual,
+			Enabled: true,
+		}); err != nil {
+			t.Fatalf("CreateIPBan(%s) 返回错误: %v", ip, err)
+		}
+	}
+
+	handler := &Handler{db: db}
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	ginCtx.Request = httptest.NewRequest(http.MethodGet, "/api/public/ip-bans", nil)
+
+	handler.GetPublicIPBans(ginCtx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload listIPBansResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Total != 25 || payload.Page != 1 || payload.PageSize != 20 || len(payload.Bans) != 20 {
+		t.Fatalf("pagination = total %d page %d page_size %d len %d, want 25/1/20/20", payload.Total, payload.Page, payload.PageSize, len(payload.Bans))
+	}
+
+	queryRecorder := httptest.NewRecorder()
+	queryCtx, _ := gin.CreateTestContext(queryRecorder)
+	queryCtx.Request = httptest.NewRequest(http.MethodGet, "/api/public/ip-bans?ip=203.0.113.25", nil)
+
+	handler.GetPublicIPBans(queryCtx)
+
+	if queryRecorder.Code != http.StatusOK {
+		t.Fatalf("query status = %d, want %d; body=%s", queryRecorder.Code, http.StatusOK, queryRecorder.Body.String())
+	}
+	var queryPayload listIPBansResponse
+	if err := json.Unmarshal(queryRecorder.Body.Bytes(), &queryPayload); err != nil {
+		t.Fatalf("decode query response: %v", err)
+	}
+	if queryPayload.Total != 1 || len(queryPayload.Bans) != 1 || queryPayload.Bans[0].IP != "203.0.113.25" {
+		t.Fatalf("query payload = %#v, want single queried IP", queryPayload)
+	}
+}
+
 func TestGetAccountAuthJSONRejectsInvalidID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

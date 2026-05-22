@@ -227,6 +227,25 @@ var codexAllowedForwardHeaders = []string{
 	"X-Codex-Beta-Features",
 }
 
+var openAIResponsesBlockedForwardHeaders = map[string]struct{}{
+	"accept":               {},
+	"accept-encoding":      {},
+	"authorization":        {},
+	"connection":           {},
+	"content-length":       {},
+	"content-type":         {},
+	"cookie":               {},
+	"host":                 {},
+	"proxy-authenticate":   {},
+	"proxy-authorization":  {},
+	"te":                   {},
+	"trailer":              {},
+	"transfer-encoding":    {},
+	"upgrade":              {},
+	"x-api-key":            {},
+	"anthropic-auth-token": {},
+}
+
 // WebsocketExecuteFunc WebSocket 执行函数（由 wsrelay 包在 main.go 中注册，避免循环依赖）
 var WebsocketExecuteFunc func(ctx context.Context, account *auth.Account, requestBody []byte, sessionID string, proxyOverride string, apiKey string, deviceCfg *DeviceProfileConfig, headers http.Header) (*http.Response, error)
 
@@ -346,16 +365,10 @@ func ExecuteOpenAIResponsesRequest(ctx context.Context, account *auth.Account, r
 	if err != nil {
 		return nil, ErrInternalError("创建请求失败", err)
 	}
+	applyOpenAIResponsesForwardHeaders(req, headers)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if headers != nil {
-		for _, key := range []string{"OpenAI-Organization", "OpenAI-Project", "Idempotency-Key"} {
-			if value := strings.TrimSpace(headers.Get(key)); value != "" {
-				req.Header.Set(key, value)
-			}
-		}
-	}
 
 	resp, err := getPooledClient(account, proxyURL).Do(req)
 	if err != nil {
@@ -506,6 +519,25 @@ func applyCodexAllowedForwardHeaders(req *http.Request, downstreamHeaders http.H
 	}
 }
 
+func applyOpenAIResponsesForwardHeaders(req *http.Request, downstreamHeaders http.Header) {
+	if req == nil || downstreamHeaders == nil {
+		return
+	}
+	for name, values := range downstreamHeaders {
+		canonicalName := http.CanonicalHeaderKey(name)
+		if _, blocked := openAIResponsesBlockedForwardHeaders[strings.ToLower(canonicalName)]; blocked {
+			continue
+		}
+		for _, value := range values {
+			value = strings.TrimSpace(value)
+			if value == "" {
+				continue
+			}
+			req.Header.Add(canonicalName, value)
+		}
+	}
+}
+
 func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessToken, cacheKey, apiKey string, deviceCfg *DeviceProfileConfig, downstreamHeaders http.Header) {
 	if req == nil {
 		return
@@ -519,7 +551,7 @@ func applyCodexRequestHeaders(req *http.Request, account *auth.Account, accessTo
 	}
 
 	var profile deviceProfile
-	version := ""
+	var version string
 	usedGeneratedHeaders := false
 	if IsDeviceProfileStabilizationEnabled(deviceCfg) {
 		profile = ResolveDeviceProfile(account, apiKey, downstreamHeaders, deviceCfg)
