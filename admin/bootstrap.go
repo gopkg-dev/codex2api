@@ -244,6 +244,7 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		StreamFlushIntervalMS:            20,
 		ImageStorageConfig:               "{}",
 		FilterLocalFallbackResponse:      true,
+		DownstreamUsageMultiplier:        1,
 		APIKeyDisabledMessage:            "API Key 已被禁用，请联系管理员。",
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 	}

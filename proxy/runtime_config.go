@@ -26,14 +26,16 @@ const (
 )
 
 type RuntimeSettings struct {
-	ClientCompatMode            string
-	CodexMinCLIVersion          string
-	StreamFlushPolicy           string
-	StreamFlushIntervalMS       int
-	FilterLocalFallbackResponse bool
-	DisableFastServiceTier      bool
-	APIKeyDisabledMessage       string
-	APIMaintenance              APIMaintenanceConfig
+	ClientCompatMode                 string
+	CodexMinCLIVersion               string
+	StreamFlushPolicy                string
+	StreamFlushIntervalMS            int
+	FilterLocalFallbackResponse      bool
+	DisableFastServiceTier           bool
+	DownstreamUsageMultiplierEnabled bool
+	DownstreamUsageMultiplier        float64
+	APIKeyDisabledMessage            string
+	APIMaintenance                   APIMaintenanceConfig
 }
 
 var runtimeSettings atomic.Value // stores RuntimeSettings
@@ -44,14 +46,16 @@ func init() {
 
 func DefaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
-		ClientCompatMode:            defaultClientCompatMode,
-		CodexMinCLIVersion:          defaultCodexMinCLIVersion,
-		StreamFlushPolicy:           defaultStreamFlushPolicy,
-		StreamFlushIntervalMS:       defaultStreamFlushIntervalMS,
-		FilterLocalFallbackResponse: true,
-		DisableFastServiceTier:      false,
-		APIKeyDisabledMessage:       defaultAPIKeyDisabledMessage,
-		APIMaintenance:              DefaultAPIMaintenanceConfig(),
+		ClientCompatMode:                 defaultClientCompatMode,
+		CodexMinCLIVersion:               defaultCodexMinCLIVersion,
+		StreamFlushPolicy:                defaultStreamFlushPolicy,
+		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
+		FilterLocalFallbackResponse:      true,
+		DisableFastServiceTier:           false,
+		DownstreamUsageMultiplierEnabled: false,
+		DownstreamUsageMultiplier:        1,
+		APIKeyDisabledMessage:            defaultAPIKeyDisabledMessage,
+		APIMaintenance:                   DefaultAPIMaintenanceConfig(),
 	}
 }
 
@@ -98,6 +102,12 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	if settings.APIKeyDisabledMessage == "" {
 		settings.APIKeyDisabledMessage = defaultAPIKeyDisabledMessage
 	}
+	if settings.DownstreamUsageMultiplier <= 0 {
+		settings.DownstreamUsageMultiplier = defaults.DownstreamUsageMultiplier
+	}
+	if settings.DownstreamUsageMultiplier > 1000 {
+		settings.DownstreamUsageMultiplier = 1000
+	}
 	settings.APIMaintenance = NormalizeAPIMaintenanceConfig(settings.APIMaintenance)
 	return settings
 }
@@ -111,6 +121,8 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
 		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
 		next.DisableFastServiceTier = settings.DisableFastServiceTier
+		next.DownstreamUsageMultiplierEnabled = settings.DownstreamUsageMultiplierEnabled
+		next.DownstreamUsageMultiplier = settings.DownstreamUsageMultiplier
 		next.APIKeyDisabledMessage = settings.APIKeyDisabledMessage
 		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)
 	}

@@ -532,19 +532,19 @@ func convertAnthropicToolChoice(raw json.RawMessage) any {
 
 // anthropicStreamTranslator 有状态的流式响应翻译器（Codex → Anthropic）
 type anthropicStreamTranslator struct {
-	model                   string
-	responseID              string
-	messageStartSent        bool
-	contentBlockIndex       int
-	contentBlockOpen        bool
-	currentBlockType        string // "text" | "thinking" | "tool_use"
-	currentToolUseID        string
-	currentToolUseName      string
-	currentToolInputBuffer  strings.Builder
-	hasToolUse              bool
-	inputTokens             int
-	outputTokens            int
-	cachedTokens            int
+	model                  string
+	responseID             string
+	messageStartSent       bool
+	contentBlockIndex      int
+	contentBlockOpen       bool
+	currentBlockType       string // "text" | "thinking" | "tool_use"
+	currentToolUseID       string
+	currentToolUseName     string
+	currentToolInputBuffer strings.Builder
+	hasToolUse             bool
+	inputTokens            int
+	outputTokens           int
+	cachedTokens           int
 }
 
 // newAnthropicStreamTranslator 创建流式翻译器
@@ -791,6 +791,14 @@ func (t *anthropicStreamTranslator) handleCompleted(data []byte) []anthropicStre
 		t.inputTokens = int(usage.Get("input_tokens").Int())
 		t.outputTokens = int(usage.Get("output_tokens").Int())
 		t.cachedTokens = int(usage.Get("input_tokens_details.cached_tokens").Int())
+		scaled := scaleAnthropicUsageForDownstream(anthropicUsage{
+			InputTokens:          t.inputTokens,
+			OutputTokens:         t.outputTokens,
+			CacheReadInputTokens: t.cachedTokens,
+		}, CurrentRuntimeSettings())
+		t.inputTokens = scaled.InputTokens
+		t.outputTokens = scaled.OutputTokens
+		t.cachedTokens = scaled.CacheReadInputTokens
 	}
 
 	// 确定 stop_reason
@@ -1043,6 +1051,7 @@ func buildAnthropicResponseFromCompleted(completedData []byte, model string) *an
 			OutputTokens:         int(usage.Get("output_tokens").Int()),
 			CacheReadInputTokens: int(usage.Get("input_tokens_details.cached_tokens").Int()),
 		}
+		resp.Usage = scaleAnthropicUsageForDownstream(resp.Usage, CurrentRuntimeSettings())
 	}
 
 	return resp

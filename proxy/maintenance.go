@@ -590,7 +590,7 @@ type maintenanceUsage struct {
 }
 
 func newMaintenanceUsage() maintenanceUsage {
-	return maintenanceUsageWithRand(newMaintenanceRand())
+	return scaleMaintenanceUsageForDownstream(maintenanceUsageWithRand(newMaintenanceRand()), CurrentRuntimeSettings())
 }
 
 func maintenanceUsageWithRand(rng *mrand.Rand) maintenanceUsage {

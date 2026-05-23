@@ -59,6 +59,8 @@ type SecurityForm = Pick<
   | "ip_auto_ban_on_rpm"
   | "filter_local_fallback_response"
   | "disable_fast_service_tier"
+  | "downstream_usage_multiplier_enabled"
+  | "downstream_usage_multiplier"
   | "api_key_disabled_message"
   | "api_maintenance_enabled"
   | "api_maintenance_message"
@@ -77,6 +79,8 @@ const defaultForm: SecurityForm = {
   ip_auto_ban_on_rpm: true,
   filter_local_fallback_response: true,
   disable_fast_service_tier: false,
+  downstream_usage_multiplier_enabled: false,
+  downstream_usage_multiplier: 1,
   api_key_disabled_message: "API Key 已被禁用，请联系管理员。",
   api_maintenance_enabled: false,
   api_maintenance_message: "系统维护中，请稍后重试。",
@@ -310,6 +314,9 @@ export default function APISecurity() {
         ip_auto_ban_on_rpm: settings.ip_auto_ban_on_rpm,
         filter_local_fallback_response: settings.filter_local_fallback_response,
         disable_fast_service_tier: settings.disable_fast_service_tier,
+        downstream_usage_multiplier_enabled:
+          settings.downstream_usage_multiplier_enabled,
+        downstream_usage_multiplier: settings.downstream_usage_multiplier,
         api_key_disabled_message: settings.api_key_disabled_message,
         api_maintenance_enabled: settings.api_maintenance_enabled,
         api_maintenance_message: settings.api_maintenance_message,
@@ -349,6 +356,9 @@ export default function APISecurity() {
         ip_auto_ban_on_qps: updated.ip_auto_ban_on_qps,
         ip_auto_ban_on_rpm: updated.ip_auto_ban_on_rpm,
         disable_fast_service_tier: updated.disable_fast_service_tier,
+        downstream_usage_multiplier_enabled:
+          updated.downstream_usage_multiplier_enabled,
+        downstream_usage_multiplier: updated.downstream_usage_multiplier,
       }));
       showToast("API 防护设置已保存");
     } catch (error) {
@@ -808,6 +818,45 @@ export default function APISecurity() {
                   }
                   label="关闭 OpenAI Fast"
                 />
+              </div>
+              <div className="rounded-lg border border-border p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold">下游 Usage 倍数</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      只调整返回给下游的 usage 数值，后台请求记录保留原始用量。
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={form.downstream_usage_multiplier_enabled}
+                    onChange={(checked) =>
+                      setForm((f) => ({
+                        ...f,
+                        downstream_usage_multiplier_enabled: checked,
+                      }))
+                    }
+                    label="下游 Usage 倍数"
+                  />
+                </div>
+                <div className="mt-3 max-w-xs">
+                  <Field label="倍数">
+                    <input
+                      type="number"
+                      min="0.01"
+                      max="1000"
+                      step="0.01"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      value={form.downstream_usage_multiplier}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          downstream_usage_multiplier:
+                            Number(e.target.value) || 1,
+                        }))
+                      }
+                    />
+                  </Field>
+                </div>
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>

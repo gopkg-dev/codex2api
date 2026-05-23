@@ -3829,148 +3829,152 @@ func (h *Handler) DeleteAPIKey(c *gin.Context) {
 // ==================== Settings ====================
 
 type settingsResponse struct {
-	SiteName                         string `json:"site_name"`
-	SiteLogo                         string `json:"site_logo"`
-	MaxConcurrency                   int    `json:"max_concurrency"`
-	GlobalRPM                        int    `json:"global_rpm"`
-	IPQPSLimit                       int    `json:"ip_qps_limit"`
-	IPRPMLimit                       int    `json:"ip_rpm_limit"`
-	IPAutoBanEnabled                 bool   `json:"ip_auto_ban_enabled"`
-	IPAutoBanDurationMinutes         int    `json:"ip_auto_ban_duration_minutes"`
-	IPAutoBanOnQPS                   bool   `json:"ip_auto_ban_on_qps"`
-	IPAutoBanOnRPM                   bool   `json:"ip_auto_ban_on_rpm"`
-	TestModel                        string `json:"test_model"`
-	TestConcurrency                  int    `json:"test_concurrency"`
-	BackgroundRefreshIntervalMinutes int    `json:"background_refresh_interval_minutes"`
-	UsageProbeMaxAgeMinutes          int    `json:"usage_probe_max_age_minutes"`
-	RecoveryProbeIntervalMinutes     int    `json:"recovery_probe_interval_minutes"`
-	LazyMode                         bool   `json:"lazy_mode"`
-	ProxyURL                         string `json:"proxy_url"`
-	PgMaxConns                       int    `json:"pg_max_conns"`
-	RedisPoolSize                    int    `json:"redis_pool_size"`
-	AutoCleanUnauthorized            bool   `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited             bool   `json:"auto_clean_rate_limited"`
-	AdminSecret                      string `json:"admin_secret"`
-	AdminAuthSource                  string `json:"admin_auth_source"`
-	AutoCleanFullUsage               bool   `json:"auto_clean_full_usage"`
-	AutoCleanError                   bool   `json:"auto_clean_error"`
-	AutoCleanExpired                 bool   `json:"auto_clean_expired"`
-	ProxyPoolEnabled                 bool   `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled             bool   `json:"fast_scheduler_enabled"`
-	SchedulerMode                    string `json:"scheduler_mode"`
-	MaxRetries                       int    `json:"max_retries"`
-	MaxRateLimitRetries              int    `json:"max_rate_limit_retries"`
-	AllowRemoteMigration             bool   `json:"allow_remote_migration"`
-	DatabaseDriver                   string `json:"database_driver"`
-	DatabaseLabel                    string `json:"database_label"`
-	CacheDriver                      string `json:"cache_driver"`
-	CacheLabel                       string `json:"cache_label"`
-	ExpiredCleaned                   int    `json:"expired_cleaned,omitempty"`
-	ModelMapping                     string `json:"model_mapping"`
-	ResinURL                         string `json:"resin_url"`
-	ResinPlatformName                string `json:"resin_platform_name"`
-	PromptFilterEnabled              bool   `json:"prompt_filter_enabled"`
-	PromptFilterMode                 string `json:"prompt_filter_mode"`
-	PromptFilterThreshold            int    `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold      int    `json:"prompt_filter_strict_threshold"`
-	PromptFilterLogMatches           bool   `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength        int    `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords       string `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns       string `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns     string `json:"prompt_filter_disabled_patterns"`
-	ClientCompatMode                 string `json:"client_compat_mode"`
-	CodexMinCLIVersion               string `json:"codex_min_cli_version"`
-	UsageLogMode                     string `json:"usage_log_mode"`
-	UsageLogBatchSize                int    `json:"usage_log_batch_size"`
-	UsageLogFlushIntervalSeconds     int    `json:"usage_log_flush_interval_seconds"`
-	StreamFlushPolicy                string `json:"stream_flush_policy"`
-	StreamFlushIntervalMS            int    `json:"stream_flush_interval_ms"`
-	FilterLocalFallbackResponse      bool   `json:"filter_local_fallback_response"`
-	DisableFastServiceTier           bool   `json:"disable_fast_service_tier"`
-	APIKeyDisabledMessage            string `json:"api_key_disabled_message"`
-	APIMaintenanceEnabled            bool   `json:"api_maintenance_enabled"`
-	APIMaintenanceMessage            string `json:"api_maintenance_message"`
-	APIMaintenanceSSERandomize       bool   `json:"api_maintenance_sse_randomize"`
-	APIMaintenanceImageB64JSON       string `json:"api_maintenance_image_b64_json"`
-	APIMaintenanceRoutesJSON         string `json:"api_maintenance_routes_json"`
-	ImageStorageBackend              string `json:"image_storage_backend"`
-	ImageS3Endpoint                  string `json:"image_s3_endpoint"`
-	ImageS3Region                    string `json:"image_s3_region"`
-	ImageS3Bucket                    string `json:"image_s3_bucket"`
-	ImageS3AccessKey                 string `json:"image_s3_access_key"`
-	ImageS3SecretKey                 string `json:"image_s3_secret_key"`
-	ImageS3Prefix                    string `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle            bool   `json:"image_s3_force_path_style"`
+	SiteName                         string  `json:"site_name"`
+	SiteLogo                         string  `json:"site_logo"`
+	MaxConcurrency                   int     `json:"max_concurrency"`
+	GlobalRPM                        int     `json:"global_rpm"`
+	IPQPSLimit                       int     `json:"ip_qps_limit"`
+	IPRPMLimit                       int     `json:"ip_rpm_limit"`
+	IPAutoBanEnabled                 bool    `json:"ip_auto_ban_enabled"`
+	IPAutoBanDurationMinutes         int     `json:"ip_auto_ban_duration_minutes"`
+	IPAutoBanOnQPS                   bool    `json:"ip_auto_ban_on_qps"`
+	IPAutoBanOnRPM                   bool    `json:"ip_auto_ban_on_rpm"`
+	TestModel                        string  `json:"test_model"`
+	TestConcurrency                  int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes          int     `json:"usage_probe_max_age_minutes"`
+	RecoveryProbeIntervalMinutes     int     `json:"recovery_probe_interval_minutes"`
+	LazyMode                         bool    `json:"lazy_mode"`
+	ProxyURL                         string  `json:"proxy_url"`
+	PgMaxConns                       int     `json:"pg_max_conns"`
+	RedisPoolSize                    int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized            bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited             bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                      string  `json:"admin_secret"`
+	AdminAuthSource                  string  `json:"admin_auth_source"`
+	AutoCleanFullUsage               bool    `json:"auto_clean_full_usage"`
+	AutoCleanError                   bool    `json:"auto_clean_error"`
+	AutoCleanExpired                 bool    `json:"auto_clean_expired"`
+	ProxyPoolEnabled                 bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled             bool    `json:"fast_scheduler_enabled"`
+	SchedulerMode                    string  `json:"scheduler_mode"`
+	MaxRetries                       int     `json:"max_retries"`
+	MaxRateLimitRetries              int     `json:"max_rate_limit_retries"`
+	AllowRemoteMigration             bool    `json:"allow_remote_migration"`
+	DatabaseDriver                   string  `json:"database_driver"`
+	DatabaseLabel                    string  `json:"database_label"`
+	CacheDriver                      string  `json:"cache_driver"`
+	CacheLabel                       string  `json:"cache_label"`
+	ExpiredCleaned                   int     `json:"expired_cleaned,omitempty"`
+	ModelMapping                     string  `json:"model_mapping"`
+	ResinURL                         string  `json:"resin_url"`
+	ResinPlatformName                string  `json:"resin_platform_name"`
+	PromptFilterEnabled              bool    `json:"prompt_filter_enabled"`
+	PromptFilterMode                 string  `json:"prompt_filter_mode"`
+	PromptFilterThreshold            int     `json:"prompt_filter_threshold"`
+	PromptFilterStrictThreshold      int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterLogMatches           bool    `json:"prompt_filter_log_matches"`
+	PromptFilterMaxTextLength        int     `json:"prompt_filter_max_text_length"`
+	PromptFilterSensitiveWords       string  `json:"prompt_filter_sensitive_words"`
+	PromptFilterCustomPatterns       string  `json:"prompt_filter_custom_patterns"`
+	PromptFilterDisabledPatterns     string  `json:"prompt_filter_disabled_patterns"`
+	ClientCompatMode                 string  `json:"client_compat_mode"`
+	CodexMinCLIVersion               string  `json:"codex_min_cli_version"`
+	UsageLogMode                     string  `json:"usage_log_mode"`
+	UsageLogBatchSize                int     `json:"usage_log_batch_size"`
+	UsageLogFlushIntervalSeconds     int     `json:"usage_log_flush_interval_seconds"`
+	StreamFlushPolicy                string  `json:"stream_flush_policy"`
+	StreamFlushIntervalMS            int     `json:"stream_flush_interval_ms"`
+	FilterLocalFallbackResponse      bool    `json:"filter_local_fallback_response"`
+	DisableFastServiceTier           bool    `json:"disable_fast_service_tier"`
+	DownstreamUsageMultiplierEnabled bool    `json:"downstream_usage_multiplier_enabled"`
+	DownstreamUsageMultiplier        float64 `json:"downstream_usage_multiplier"`
+	APIKeyDisabledMessage            string  `json:"api_key_disabled_message"`
+	APIMaintenanceEnabled            bool    `json:"api_maintenance_enabled"`
+	APIMaintenanceMessage            string  `json:"api_maintenance_message"`
+	APIMaintenanceSSERandomize       bool    `json:"api_maintenance_sse_randomize"`
+	APIMaintenanceImageB64JSON       string  `json:"api_maintenance_image_b64_json"`
+	APIMaintenanceRoutesJSON         string  `json:"api_maintenance_routes_json"`
+	ImageStorageBackend              string  `json:"image_storage_backend"`
+	ImageS3Endpoint                  string  `json:"image_s3_endpoint"`
+	ImageS3Region                    string  `json:"image_s3_region"`
+	ImageS3Bucket                    string  `json:"image_s3_bucket"`
+	ImageS3AccessKey                 string  `json:"image_s3_access_key"`
+	ImageS3SecretKey                 string  `json:"image_s3_secret_key"`
+	ImageS3Prefix                    string  `json:"image_s3_prefix"`
+	ImageS3ForcePathStyle            bool    `json:"image_s3_force_path_style"`
 }
 
 type updateSettingsReq struct {
-	SiteName                         *string `json:"site_name"`
-	SiteLogo                         *string `json:"site_logo"`
-	MaxConcurrency                   *int    `json:"max_concurrency"`
-	GlobalRPM                        *int    `json:"global_rpm"`
-	IPQPSLimit                       *int    `json:"ip_qps_limit"`
-	LegacyIPQPSLimit                 *int    `json:"ip_concurrency_limit"`
-	IPRPMLimit                       *int    `json:"ip_rpm_limit"`
-	IPAutoBanEnabled                 *bool   `json:"ip_auto_ban_enabled"`
-	IPAutoBanDurationMinutes         *int    `json:"ip_auto_ban_duration_minutes"`
-	IPAutoBanOnQPS                   *bool   `json:"ip_auto_ban_on_qps"`
-	IPAutoBanOnRPM                   *bool   `json:"ip_auto_ban_on_rpm"`
-	TestModel                        *string `json:"test_model"`
-	TestConcurrency                  *int    `json:"test_concurrency"`
-	BackgroundRefreshIntervalMinutes *int    `json:"background_refresh_interval_minutes"`
-	UsageProbeMaxAgeMinutes          *int    `json:"usage_probe_max_age_minutes"`
-	RecoveryProbeIntervalMinutes     *int    `json:"recovery_probe_interval_minutes"`
-	LazyMode                         *bool   `json:"lazy_mode"`
-	ProxyURL                         *string `json:"proxy_url"`
-	PgMaxConns                       *int    `json:"pg_max_conns"`
-	RedisPoolSize                    *int    `json:"redis_pool_size"`
-	AutoCleanUnauthorized            *bool   `json:"auto_clean_unauthorized"`
-	AutoCleanRateLimited             *bool   `json:"auto_clean_rate_limited"`
-	AdminSecret                      *string `json:"admin_secret"`
-	AutoCleanFullUsage               *bool   `json:"auto_clean_full_usage"`
-	AutoCleanError                   *bool   `json:"auto_clean_error"`
-	AutoCleanExpired                 *bool   `json:"auto_clean_expired"`
-	ProxyPoolEnabled                 *bool   `json:"proxy_pool_enabled"`
-	FastSchedulerEnabled             *bool   `json:"fast_scheduler_enabled"`
-	SchedulerMode                    *string `json:"scheduler_mode"`
-	MaxRetries                       *int    `json:"max_retries"`
-	MaxRateLimitRetries              *int    `json:"max_rate_limit_retries"`
-	AllowRemoteMigration             *bool   `json:"allow_remote_migration"`
-	ModelMapping                     *string `json:"model_mapping"`
-	ResinURL                         *string `json:"resin_url"`
-	ResinPlatformName                *string `json:"resin_platform_name"`
-	PromptFilterEnabled              *bool   `json:"prompt_filter_enabled"`
-	PromptFilterMode                 *string `json:"prompt_filter_mode"`
-	PromptFilterThreshold            *int    `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold      *int    `json:"prompt_filter_strict_threshold"`
-	PromptFilterLogMatches           *bool   `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength        *int    `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords       *string `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns       *string `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns     *string `json:"prompt_filter_disabled_patterns"`
-	ClientCompatMode                 *string `json:"client_compat_mode"`
-	CodexMinCLIVersion               *string `json:"codex_min_cli_version"`
-	UsageLogMode                     *string `json:"usage_log_mode"`
-	UsageLogBatchSize                *int    `json:"usage_log_batch_size"`
-	UsageLogFlushIntervalSeconds     *int    `json:"usage_log_flush_interval_seconds"`
-	StreamFlushPolicy                *string `json:"stream_flush_policy"`
-	StreamFlushIntervalMS            *int    `json:"stream_flush_interval_ms"`
-	FilterLocalFallbackResponse      *bool   `json:"filter_local_fallback_response"`
-	DisableFastServiceTier           *bool   `json:"disable_fast_service_tier"`
-	APIKeyDisabledMessage            *string `json:"api_key_disabled_message"`
-	APIMaintenanceEnabled            *bool   `json:"api_maintenance_enabled"`
-	APIMaintenanceMessage            *string `json:"api_maintenance_message"`
-	APIMaintenanceSSERandomize       *bool   `json:"api_maintenance_sse_randomize"`
-	APIMaintenanceImageB64JSON       *string `json:"api_maintenance_image_b64_json"`
-	APIMaintenanceRoutesJSON         *string `json:"api_maintenance_routes_json"`
-	ImageStorageBackend              *string `json:"image_storage_backend"`
-	ImageS3Endpoint                  *string `json:"image_s3_endpoint"`
-	ImageS3Region                    *string `json:"image_s3_region"`
-	ImageS3Bucket                    *string `json:"image_s3_bucket"`
-	ImageS3AccessKey                 *string `json:"image_s3_access_key"`
-	ImageS3SecretKey                 *string `json:"image_s3_secret_key"`
-	ImageS3Prefix                    *string `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle            *bool   `json:"image_s3_force_path_style"`
+	SiteName                         *string  `json:"site_name"`
+	SiteLogo                         *string  `json:"site_logo"`
+	MaxConcurrency                   *int     `json:"max_concurrency"`
+	GlobalRPM                        *int     `json:"global_rpm"`
+	IPQPSLimit                       *int     `json:"ip_qps_limit"`
+	LegacyIPQPSLimit                 *int     `json:"ip_concurrency_limit"`
+	IPRPMLimit                       *int     `json:"ip_rpm_limit"`
+	IPAutoBanEnabled                 *bool    `json:"ip_auto_ban_enabled"`
+	IPAutoBanDurationMinutes         *int     `json:"ip_auto_ban_duration_minutes"`
+	IPAutoBanOnQPS                   *bool    `json:"ip_auto_ban_on_qps"`
+	IPAutoBanOnRPM                   *bool    `json:"ip_auto_ban_on_rpm"`
+	TestModel                        *string  `json:"test_model"`
+	TestConcurrency                  *int     `json:"test_concurrency"`
+	BackgroundRefreshIntervalMinutes *int     `json:"background_refresh_interval_minutes"`
+	UsageProbeMaxAgeMinutes          *int     `json:"usage_probe_max_age_minutes"`
+	RecoveryProbeIntervalMinutes     *int     `json:"recovery_probe_interval_minutes"`
+	LazyMode                         *bool    `json:"lazy_mode"`
+	ProxyURL                         *string  `json:"proxy_url"`
+	PgMaxConns                       *int     `json:"pg_max_conns"`
+	RedisPoolSize                    *int     `json:"redis_pool_size"`
+	AutoCleanUnauthorized            *bool    `json:"auto_clean_unauthorized"`
+	AutoCleanRateLimited             *bool    `json:"auto_clean_rate_limited"`
+	AdminSecret                      *string  `json:"admin_secret"`
+	AutoCleanFullUsage               *bool    `json:"auto_clean_full_usage"`
+	AutoCleanError                   *bool    `json:"auto_clean_error"`
+	AutoCleanExpired                 *bool    `json:"auto_clean_expired"`
+	ProxyPoolEnabled                 *bool    `json:"proxy_pool_enabled"`
+	FastSchedulerEnabled             *bool    `json:"fast_scheduler_enabled"`
+	SchedulerMode                    *string  `json:"scheduler_mode"`
+	MaxRetries                       *int     `json:"max_retries"`
+	MaxRateLimitRetries              *int     `json:"max_rate_limit_retries"`
+	AllowRemoteMigration             *bool    `json:"allow_remote_migration"`
+	ModelMapping                     *string  `json:"model_mapping"`
+	ResinURL                         *string  `json:"resin_url"`
+	ResinPlatformName                *string  `json:"resin_platform_name"`
+	PromptFilterEnabled              *bool    `json:"prompt_filter_enabled"`
+	PromptFilterMode                 *string  `json:"prompt_filter_mode"`
+	PromptFilterThreshold            *int     `json:"prompt_filter_threshold"`
+	PromptFilterStrictThreshold      *int     `json:"prompt_filter_strict_threshold"`
+	PromptFilterLogMatches           *bool    `json:"prompt_filter_log_matches"`
+	PromptFilterMaxTextLength        *int     `json:"prompt_filter_max_text_length"`
+	PromptFilterSensitiveWords       *string  `json:"prompt_filter_sensitive_words"`
+	PromptFilterCustomPatterns       *string  `json:"prompt_filter_custom_patterns"`
+	PromptFilterDisabledPatterns     *string  `json:"prompt_filter_disabled_patterns"`
+	ClientCompatMode                 *string  `json:"client_compat_mode"`
+	CodexMinCLIVersion               *string  `json:"codex_min_cli_version"`
+	UsageLogMode                     *string  `json:"usage_log_mode"`
+	UsageLogBatchSize                *int     `json:"usage_log_batch_size"`
+	UsageLogFlushIntervalSeconds     *int     `json:"usage_log_flush_interval_seconds"`
+	StreamFlushPolicy                *string  `json:"stream_flush_policy"`
+	StreamFlushIntervalMS            *int     `json:"stream_flush_interval_ms"`
+	FilterLocalFallbackResponse      *bool    `json:"filter_local_fallback_response"`
+	DisableFastServiceTier           *bool    `json:"disable_fast_service_tier"`
+	DownstreamUsageMultiplierEnabled *bool    `json:"downstream_usage_multiplier_enabled"`
+	DownstreamUsageMultiplier        *float64 `json:"downstream_usage_multiplier"`
+	APIKeyDisabledMessage            *string  `json:"api_key_disabled_message"`
+	APIMaintenanceEnabled            *bool    `json:"api_maintenance_enabled"`
+	APIMaintenanceMessage            *string  `json:"api_maintenance_message"`
+	APIMaintenanceSSERandomize       *bool    `json:"api_maintenance_sse_randomize"`
+	APIMaintenanceImageB64JSON       *string  `json:"api_maintenance_image_b64_json"`
+	APIMaintenanceRoutesJSON         *string  `json:"api_maintenance_routes_json"`
+	ImageStorageBackend              *string  `json:"image_storage_backend"`
+	ImageS3Endpoint                  *string  `json:"image_s3_endpoint"`
+	ImageS3Region                    *string  `json:"image_s3_region"`
+	ImageS3Bucket                    *string  `json:"image_s3_bucket"`
+	ImageS3AccessKey                 *string  `json:"image_s3_access_key"`
+	ImageS3SecretKey                 *string  `json:"image_s3_secret_key"`
+	ImageS3Prefix                    *string  `json:"image_s3_prefix"`
+	ImageS3ForcePathStyle            *bool    `json:"image_s3_force_path_style"`
 }
 
 type brandingResponse struct {
@@ -4406,6 +4410,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
+		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
@@ -4744,6 +4750,14 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.DisableFastServiceTier = *req.DisableFastServiceTier
 		log.Printf("设置已更新: disable_fast_service_tier = %t", runtimeCfg.DisableFastServiceTier)
 	}
+	if req.DownstreamUsageMultiplierEnabled != nil {
+		runtimeCfg.DownstreamUsageMultiplierEnabled = *req.DownstreamUsageMultiplierEnabled
+		log.Printf("设置已更新: downstream_usage_multiplier_enabled = %t", runtimeCfg.DownstreamUsageMultiplierEnabled)
+	}
+	if req.DownstreamUsageMultiplier != nil {
+		runtimeCfg.DownstreamUsageMultiplier = *req.DownstreamUsageMultiplier
+		log.Printf("设置已更新: downstream_usage_multiplier = %.4f", runtimeCfg.DownstreamUsageMultiplier)
+	}
 	if req.APIKeyDisabledMessage != nil {
 		runtimeCfg.APIKeyDisabledMessage = *req.APIKeyDisabledMessage
 		log.Printf("设置已更新: api_key_disabled_message")
@@ -4997,6 +5011,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ImageStorageConfig:               imgConfigJSON,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
+		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
 	})
@@ -5080,6 +5096,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
+		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,

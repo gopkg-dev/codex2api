@@ -152,6 +152,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				scheduler_mode TEXT DEFAULT 'round_robin',
 				filter_local_fallback_response INTEGER DEFAULT 1,
 				disable_fast_service_tier INTEGER DEFAULT 0,
+				downstream_usage_multiplier_enabled INTEGER DEFAULT 0,
+				downstream_usage_multiplier REAL DEFAULT 1,
 				api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。',
 				api_maintenance_config TEXT DEFAULT '{}'
 			);`,
@@ -369,6 +371,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "scheduler_mode", "TEXT DEFAULT 'round_robin'"},
 		{"system_settings", "filter_local_fallback_response", "INTEGER DEFAULT 1"},
 		{"system_settings", "disable_fast_service_tier", "INTEGER DEFAULT 0"},
+		{"system_settings", "downstream_usage_multiplier_enabled", "INTEGER DEFAULT 0"},
+		{"system_settings", "downstream_usage_multiplier", "REAL DEFAULT 1"},
 		{"system_settings", "api_key_disabled_message", "TEXT DEFAULT 'API Key 已被禁用，请联系管理员。'"},
 		{"system_settings", "api_maintenance_config", "TEXT DEFAULT '{}'"},
 		{"accounts", "enabled", "INTEGER DEFAULT 1"},

@@ -1432,7 +1432,8 @@ func (h *Handler) Responses(c *gin.Context) {
 						imageLogInfo = mergeImageUsageLogInfo(imageLogInfo, imageUsageLogInfoFromImage(image))
 					}
 					if !clientGone {
-						if err := filter.write(fmt.Sprintf("data: %s\n\n", data), writeFiltered); err != nil {
+						downstreamData := scaleDownstreamUsageJSON(data, CurrentRuntimeSettings())
+						if err := filter.write(fmt.Sprintf("data: %s\n\n", downstreamData), writeFiltered); err != nil {
 							writeErr = err
 							clientGone = true
 						} else if err := filter.flushIfReleased(writeFiltered); err != nil {
@@ -1466,7 +1467,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					if localFallbackDetected {
 						sendLocalFallbackError(c)
 					} else {
-						c.Data(http.StatusOK, contentType, respBody)
+						c.Data(http.StatusOK, contentType, scaleDownstreamUsageJSON(respBody, CurrentRuntimeSettings()))
 					}
 				}
 			}
@@ -1744,7 +1745,8 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 
 				if !clientGone {
-					if err := filter.write(fmt.Sprintf("data: %s\n\n", data), writeFiltered); err != nil {
+					downstreamData := scaleDownstreamUsageJSON(data, CurrentRuntimeSettings())
+					if err := filter.write(fmt.Sprintf("data: %s\n\n", downstreamData), writeFiltered); err != nil {
 						writeErr = err
 						clientGone = true
 					} else if err := filter.flushIfReleased(writeFiltered); err != nil {
@@ -1866,7 +1868,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					"error": gin.H{"message": outcome.failureMessage, "type": "upstream_error"},
 				})
 			} else if responseJSON != nil {
-				c.Data(http.StatusOK, "application/json", responseJSON)
+				c.Data(http.StatusOK, "application/json", scaleDownstreamUsageJSON(responseJSON, CurrentRuntimeSettings()))
 			} else {
 				c.JSON(http.StatusBadGateway, gin.H{
 					"error": gin.H{"message": "未收到完整的上游响应", "type": "upstream_error"},
@@ -2172,7 +2174,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			sendLocalFallbackError(c)
 			return
 		}
-		c.Data(http.StatusOK, "application/json", respBody)
+		c.Data(http.StatusOK, "application/json", scaleDownstreamUsageJSON(respBody, CurrentRuntimeSettings()))
 		return
 	}
 }

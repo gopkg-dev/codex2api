@@ -448,6 +448,8 @@ export interface SystemSettings {
   stream_flush_interval_ms: number;
   filter_local_fallback_response: boolean;
   disable_fast_service_tier: boolean;
+  downstream_usage_multiplier_enabled: boolean;
+  downstream_usage_multiplier: number;
   api_key_disabled_message: string;
   api_maintenance_enabled: boolean;
   api_maintenance_message: string;

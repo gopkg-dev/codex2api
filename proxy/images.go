@@ -1030,9 +1030,9 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 				}
 				c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": readErr.Error(), "type": "upstream_error"}})
 				h.logUsageForRequest(c, &database.UsageLogInput{
-					AccountID: account.ID(),
-					Endpoint:  inboundEndpoint,
-					Model:     requestModel,
+					AccountID:  account.ID(),
+					Endpoint:   inboundEndpoint,
+					Model:      requestModel,
 					StatusCode: http.StatusBadGateway,
 				})
 				return
@@ -1060,9 +1060,9 @@ func (h *Handler) forwardImagesRequest(c *gin.Context, inboundEndpoint, requestM
 				c.JSON(http.StatusBadGateway, gin.H{"error": gin.H{"message": readErr.Error(), "type": "upstream_error"}})
 			}
 			h.logUsageForRequest(c, &database.UsageLogInput{
-				AccountID: account.ID(),
-				Endpoint:  inboundEndpoint,
-				Model:     requestModel,
+				AccountID:  account.ID(),
+				Endpoint:   inboundEndpoint,
+				Model:      requestModel,
 				StatusCode: http.StatusBadGateway,
 			})
 			return
@@ -1582,7 +1582,7 @@ func buildImagesAPIResponse(results []imageCallResult, createdAt int64, usageRaw
 		out, _ = sjson.SetBytes(out, "model", firstMeta.Model)
 	}
 	if len(usageRaw) > 0 && json.Valid(usageRaw) {
-		out, _ = sjson.SetRawBytes(out, "usage", usageRaw)
+		out, _ = sjson.SetRawBytes(out, "usage", scaleUsageRawForDownstream(usageRaw, CurrentRuntimeSettings()))
 	}
 	return out, nil
 }
@@ -1627,7 +1627,7 @@ func buildImagesStreamCompletedPayload(eventType string, image imageCallResult, 
 	}
 	payload = addImageMetaToPayload(payload, image)
 	if len(usageRaw) > 0 && json.Valid(usageRaw) {
-		payload, _ = sjson.SetRawBytes(payload, "usage", usageRaw)
+		payload, _ = sjson.SetRawBytes(payload, "usage", scaleUsageRawForDownstream(usageRaw, CurrentRuntimeSettings()))
 	}
 	return payload
 }

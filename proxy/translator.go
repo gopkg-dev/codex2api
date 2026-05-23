@@ -2314,7 +2314,7 @@ func newFinalChunk(id, model string, created int64, finishReason string, usage *
 			Index:        0,
 			FinishReason: &finishReason,
 		}},
-		Usage: usage,
+		Usage: scaleUsageInfoForDownstream(usage, CurrentRuntimeSettings()),
 	}
 	b, _ := json.Marshal(chunk)
 	return b
@@ -2493,7 +2493,7 @@ func TranslateCompactResponse(responseData []byte, model string, id string) []by
 		})
 	}
 
-	usage := extractUsage(responseData)
+	usage := scaleUsageInfoForDownstream(extractUsage(responseData), CurrentRuntimeSettings())
 
 	resp := openAICompactResponse{
 		ID:     id,
@@ -2548,7 +2548,7 @@ func BuildCompactResponse(id, model string, created int64, content string, toolC
 			Message:      msg,
 			FinishReason: finishReason,
 		}},
-		Usage: usage,
+		Usage: scaleUsageInfoForDownstream(usage, CurrentRuntimeSettings()),
 	}
 	b, _ := json.Marshal(resp)
 	return b

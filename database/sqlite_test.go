@@ -272,25 +272,27 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	defer db.Close()
 
 	settings := &SystemSettings{
-		SiteName:                     DefaultSiteName,
-		MaxConcurrency:               2,
-		TestModel:                    "gpt-5.4",
-		TestConcurrency:              50,
-		PgMaxConns:                   50,
-		RedisPoolSize:                30,
-		ClientCompatMode:             "preserve",
-		CodexMinCLIVersion:           "0.118.0",
-		UsageLogMode:                 UsageLogModeFull,
-		UsageLogBatchSize:            200,
-		UsageLogFlushIntervalSeconds: 5,
-		StreamFlushPolicy:            "immediate",
-		StreamFlushIntervalMS:        20,
-		ImageStorageConfig:           "{}",
-		IPQPSLimit:                   3,
-		IPRPMLimit:                   7,
-		FilterLocalFallbackResponse:  true,
-		DisableFastServiceTier:       true,
-		APIMaintenanceConfig:         `{"enabled":true,"message":"维护中"}`,
+		SiteName:                         DefaultSiteName,
+		MaxConcurrency:                   2,
+		TestModel:                        "gpt-5.4",
+		TestConcurrency:                  50,
+		PgMaxConns:                       50,
+		RedisPoolSize:                    30,
+		ClientCompatMode:                 "preserve",
+		CodexMinCLIVersion:               "0.118.0",
+		UsageLogMode:                     UsageLogModeFull,
+		UsageLogBatchSize:                200,
+		UsageLogFlushIntervalSeconds:     5,
+		StreamFlushPolicy:                "immediate",
+		StreamFlushIntervalMS:            20,
+		ImageStorageConfig:               "{}",
+		IPQPSLimit:                       3,
+		IPRPMLimit:                       7,
+		FilterLocalFallbackResponse:      true,
+		DisableFastServiceTier:           true,
+		DownstreamUsageMultiplierEnabled: true,
+		DownstreamUsageMultiplier:        3.5,
+		APIMaintenanceConfig:             `{"enabled":true,"message":"维护中"}`,
 	}
 
 	if err := db.UpdateSystemSettings(context.Background(), settings); err != nil {
@@ -309,6 +311,12 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	}
 	if !got.DisableFastServiceTier {
 		t.Fatal("DisableFastServiceTier = false, want true")
+	}
+	if !got.DownstreamUsageMultiplierEnabled {
+		t.Fatal("DownstreamUsageMultiplierEnabled = false, want true")
+	}
+	if got.DownstreamUsageMultiplier != 3.5 {
+		t.Fatalf("DownstreamUsageMultiplier = %f, want 3.5", got.DownstreamUsageMultiplier)
 	}
 	if got.APIMaintenanceConfig != `{"enabled":true,"message":"维护中"}` {
 		t.Fatalf("APIMaintenanceConfig = %q", got.APIMaintenanceConfig)
