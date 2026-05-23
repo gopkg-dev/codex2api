@@ -903,6 +903,116 @@ func TestRateLimiterAutoBansIPAfterRPMLimit(t *testing.T) {
 	}
 }
 
+func TestRateLimiterAutoBansForwardedClientIPBehindLoopbackProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	rl := NewRateLimiter(0)
+	rl.UpdateIPRPMLimit(1)
+	rl.UpdateIPAutoBanConfig(IPAutoBanConfig{
+		Enabled:  true,
+		Duration: time.Hour,
+		BanOnRPM: true,
+		BanOnQPS: true,
+	})
+	var bannedIP string
+	rl.SetIPAutoBanCallback(func(ip string, banReason string, expiresAt time.Time) {
+		bannedIP = ip
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	firstReq.RemoteAddr = "127.0.0.1:1234"
+	firstReq.Header.Set("X-Forwarded-For", "203.0.113.88, 127.0.0.1")
+	router.ServeHTTP(first, firstReq)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	secondReq.RemoteAddr = "127.0.0.1:5678"
+	secondReq.Header.Set("X-Forwarded-For", "203.0.113.88, 127.0.0.1")
+	router.ServeHTTP(second, secondReq)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200; body=%s", second.Code, second.Body.String())
+	}
+	if bannedIP != "203.0.113.88" {
+		t.Fatalf("auto ban callback ip = %q, want forwarded client ip", bannedIP)
+	}
+}
+
+func TestRateLimiterDoesNotAutoBanLoopbackProxyWithoutForwardedIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	rl := NewRateLimiter(0)
+	rl.UpdateIPRPMLimit(1)
+	rl.UpdateIPAutoBanConfig(IPAutoBanConfig{
+		Enabled:  true,
+		Duration: time.Hour,
+		BanOnRPM: true,
+		BanOnQPS: true,
+	})
+	var bannedIP string
+	rl.SetIPAutoBanCallback(func(ip string, banReason string, expiresAt time.Time) {
+		bannedIP = ip
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	firstReq.RemoteAddr = "127.0.0.1:1234"
+	router.ServeHTTP(first, firstReq)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200", first.Code)
+	}
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	secondReq.RemoteAddr = "127.0.0.1:5678"
+	router.ServeHTTP(second, secondReq)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200; body=%s", second.Code, second.Body.String())
+	}
+	if bannedIP != "" {
+		t.Fatalf("auto ban callback ip = %q, want no loopback ban", bannedIP)
+	}
+}
+
+func TestRateLimiterIgnoresForwardedIPFromPublicRemote(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.RemoteAddr = "198.51.100.10:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.88")
+
+	if got := rateLimitForwardedClientIP(req); got != "" {
+		t.Fatalf("forwarded client ip = %q, want empty for public remote", got)
+	}
+}
+
 func TestRateLimiterAutoBansIPAfterQPSLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()

@@ -918,6 +918,9 @@ func (rl *RateLimiter) autoBanIP(ip string, reason string) {
 	if ip == "" || !rl.ipAutoBanEnabled.Load() {
 		return
 	}
+	if !rateLimitCanAutoBanIP(ip) {
+		return
+	}
 	if reason == "qps_limit" && !rl.ipAutoBanOnQPS.Load() {
 		return
 	}
@@ -1149,6 +1152,9 @@ func rateLimitClientIP(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
 	}
+	if ip := rateLimitForwardedClientIP(c.Request); ip != "" {
+		return ip
+	}
 	if ip := c.ClientIP(); ip != "" {
 		return ip
 	}
@@ -1157,6 +1163,43 @@ func rateLimitClientIP(c *gin.Context) string {
 		return host
 	}
 	return c.Request.RemoteAddr
+}
+
+func rateLimitForwardedClientIP(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	remote, ok := parseRateLimitIPAddr(req.RemoteAddr)
+	if !ok || !rateLimitTrustForwardedHeadersFrom(remote) {
+		return ""
+	}
+	for _, value := range req.Header.Values("X-Forwarded-For") {
+		for _, part := range strings.Split(value, ",") {
+			if addr, ok := parseRateLimitIPAddr(part); ok {
+				return addr.String()
+			}
+		}
+	}
+	for _, name := range []string{"X-Real-IP", "CF-Connecting-IP", "True-Client-IP"} {
+		if addr, ok := parseRateLimitIPAddr(req.Header.Get(name)); ok {
+			return addr.String()
+		}
+	}
+	return ""
+}
+
+func rateLimitTrustForwardedHeadersFrom(addr netip.Addr) bool {
+	addr = addr.Unmap()
+	return addr.IsLoopback() || addr.IsPrivate()
+}
+
+func rateLimitCanAutoBanIP(ip string) bool {
+	addr, ok := parseRateLimitIPAddr(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	return !addr.IsLoopback() && !addr.IsPrivate() && !addr.IsLinkLocalUnicast()
 }
 
 // GetEnhancedLimiter 获取增强型限流器
