@@ -191,6 +191,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	r.GET("/api/public/home", h.GetPublicHome)
 	r.GET("/api/public/chart-data", h.GetPublicChartData)
 	r.GET("/api/public/ip-bans", h.GetPublicIPBans)
+	r.POST("/api/public/model-check", h.PostPublicModelCheck)
 
 	// 首次初始化端点（无需鉴权，仅在系统未配置 ADMIN_SECRET 时可用）
 	// 这两个端点必须注册在 adminAuthMiddleware 之外，否则会被 fail-closed 拦截。

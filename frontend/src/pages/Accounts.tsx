@@ -533,18 +533,9 @@ export default function Accounts() {
     const disabledAccounts = accounts.filter(
       (account) => account.enabled === false,
     ).length;
-    const abnormalAccounts = accounts.filter(
-      (account) =>
-        account.status === "unauthorized" ||
-        account.status === "error" ||
-        account.enabled === false,
-    ).length;
+    const abnormalAccounts = accounts.filter(isAbnormalAccount).length;
     const rateLimitedExclusive = accounts.filter(
-      (account) =>
-        account.status !== "unauthorized" &&
-        account.status !== "error" &&
-        account.enabled !== false &&
-        isRateLimitedAccount(account),
+      (account) => !isAbnormalAccount(account) && isRateLimitedAccount(account),
     ).length;
     const normalAccounts = accounts.length - abnormalAccounts - rateLimitedExclusive;
     return {
@@ -608,9 +599,7 @@ export default function Accounts() {
       switch (statusFilter) {
         case "normal":
           if (
-            account.status === "unauthorized" ||
-            account.status === "error" ||
-            account.enabled === false ||
+            isAbnormalAccount(account) ||
             isRateLimitedAccount(account)
           )
             return false;
@@ -618,21 +607,11 @@ export default function Accounts() {
             return false;
           break;
         case "rate_limited":
-          if (
-            account.status === "unauthorized" ||
-            account.status === "error" ||
-            account.enabled === false
-          )
-            return false;
+          if (isAbnormalAccount(account)) return false;
           if (!isRateLimitedAccount(account)) return false;
           break;
         case "abnormal":
-          if (
-            account.status !== "unauthorized" &&
-            account.status !== "error" &&
-            account.enabled !== false
-          )
-            return false;
+          if (!isAbnormalAccount(account)) return false;
           break;
         case "banned":
           if (account.status !== "unauthorized") return false;
@@ -4942,6 +4921,21 @@ function isRateLimitedAccount(account: AccountRow): boolean {
   return getAccountRateLimitWindow(account) !== null;
 }
 
+function isPaymentRequiredAccount(account: AccountRow): boolean {
+  const status = (account.status || "").toLowerCase();
+  const reason = (account.cooldown_reason || "").toLowerCase();
+  return status === "payment_required" || reason === "payment_required";
+}
+
+function isAbnormalAccount(account: AccountRow): boolean {
+  return (
+    account.status === "unauthorized" ||
+    account.status === "error" ||
+    account.enabled === false ||
+    isPaymentRequiredAccount(account)
+  );
+}
+
 function getAccountRateLimitWindow(
   account: AccountRow,
 ): RateLimitWindow | null {
@@ -6183,10 +6177,13 @@ function BilledCell({ account }: { account: AccountRow }) {
 function getAccountStatusCountdownUntil(
   account: AccountRow,
 ): string | undefined {
-  const status = account.status;
+  const status = (account.status || "").toLowerCase();
   if (
     account.cooldown_until &&
-    (status === "rate_limited" || status === "error" || status === "cooldown")
+    (status === "rate_limited" ||
+      status === "error" ||
+      status === "cooldown" ||
+      status === "payment_required")
   ) {
     return account.cooldown_until;
   }

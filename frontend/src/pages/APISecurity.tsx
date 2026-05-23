@@ -662,8 +662,12 @@ export default function APISecurity() {
                           </span>
                         </TableCell>
                         <TableCell>{ban.hit_count}</TableCell>
-                        <TableCell title={formatDate(ban.banned_at)}>
-                          {formatDate(ban.banned_at)}
+                        <TableCell
+                          title={formatDate(
+                            ban.last_triggered_at || ban.banned_at,
+                          )}
+                        >
+                          {formatDate(ban.last_triggered_at || ban.banned_at)}
                         </TableCell>
                         <TableCell
                           title={formatDate(ban.unbanned_at || ban.expires_at)}

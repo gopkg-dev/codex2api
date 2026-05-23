@@ -20,6 +20,7 @@ const APIKeys = lazy(() => import("./pages/APIKeys"));
 const Usage = lazy(() => import("./pages/Usage"));
 const ImageStudio = lazy(() => import("./pages/ImageStudio"));
 const PromptFilter = lazy(() => import("./pages/PromptFilter"));
+const PublicModelChecker = lazy(() => import("./pages/PublicModelChecker"));
 
 export default function App() {
   const isAdminShell = window.location.pathname.startsWith("/admin");
@@ -30,6 +31,20 @@ export default function App() {
         <RouteErrorBoundary>
           <Routes>
             <Route path="/" element={<PublicHome />} />
+            <Route
+              path="/model-checker"
+              element={
+                <Suspense
+                  fallback={
+                    <StateShell variant="page" loading>
+                      {null}
+                    </StateShell>
+                  }
+                >
+                  <PublicModelChecker />
+                </Suspense>
+              }
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </RouteErrorBoundary>

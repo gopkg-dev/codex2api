@@ -359,6 +359,8 @@ func main() {
 	if servePublicHome != nil {
 		r.GET("/", servePublicHome)
 		r.HEAD("/", servePublicHome)
+		r.GET("/model-checker", servePublicHome)
+		r.HEAD("/model-checker", servePublicHome)
 	} else {
 		r.GET("/", func(c *gin.Context) {
 			c.Redirect(http.StatusFound, "/admin/")

@@ -33,6 +33,7 @@ import type {
   OpsErrorSummary,
   OpsOverviewResponse,
   PublicHomeResponse,
+  PublicModelCheckResponse,
   PromptFilterLogsResponse,
   PromptFilterRulesResponse,
   PromptFilterTestResponse,
@@ -224,6 +225,12 @@ export const api = {
     const suffix = search.toString() ? `?${search.toString()}` : "";
     return requestPublic<IPBansResponse>(`/api/public/ip-bans${suffix}`);
   },
+  checkPublicModels: (data: { base_url: string; api_key: string }) =>
+    requestPublic<PublicModelCheckResponse>("/api/public/model-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
   getStats: () => request<StatsResponse>("/stats"),
   getAccounts: () => request<AccountsResponse>("/accounts"),
   addAccount: (data: AddAccountRequest) =>

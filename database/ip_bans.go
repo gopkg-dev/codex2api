@@ -228,7 +228,7 @@ func (db *DB) ListIPBans(ctx context.Context, includeInactive bool) ([]IPBanRow,
 	query := `
 		SELECT id, ip, reason, source, banned_at, expires_at, unbanned_at, hit_count, last_triggered_at, enabled
 		FROM ip_bans ` + where + `
-		ORDER BY ip ASC, id ASC
+		ORDER BY COALESCE(last_triggered_at, banned_at) DESC, id DESC
 	`
 	if db.isSQLite() {
 		query = strings.ReplaceAll(query, "$1", "?")
@@ -280,7 +280,7 @@ func (db *DB) ListIPBansPaged(ctx context.Context, includeInactive bool, page, p
 	query := `
 		SELECT id, ip, reason, source, banned_at, expires_at, unbanned_at, hit_count, last_triggered_at, enabled
 		FROM ip_bans ` + where + `
-		ORDER BY ip ASC, id ASC
+		ORDER BY COALESCE(last_triggered_at, banned_at) DESC, id DESC
 	`
 	queryArgs := append([]interface{}{}, args...)
 	if db.isSQLite() {

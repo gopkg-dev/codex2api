@@ -571,6 +571,7 @@
     "cooldown": "Cooling Down",
     "rate_limited": "Rate Limited",
     "usage_exhausted": "Rate Limited",
+    "payment_required": "Payment Required",
     "unauthorized": "Banned",
     "error": "Error",
     "refreshing": "Refreshing",

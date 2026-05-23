@@ -161,6 +161,27 @@ export interface FetchOpenAIResponsesModelsResponse {
   models: string[];
 }
 
+export interface PublicModelEndpointSupport {
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+export interface PublicModelCheckRow {
+  model: string;
+  chat: PublicModelEndpointSupport;
+  responses: PublicModelEndpointSupport;
+  usable_any: boolean;
+  usable_all: boolean;
+}
+
+export interface PublicModelCheckResponse {
+  base_url: string;
+  rows: PublicModelCheckRow[];
+  chat_usable: string[];
+  responses_usable: string[];
+}
+
 export interface UpdateAccountSchedulerRequest {
   score_bias_override?: number | null;
   base_concurrency_override?: number | null;

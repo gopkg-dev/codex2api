@@ -510,6 +510,7 @@ func TestListIPBansPaginates(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateIPBan(%s) 返回错误: %v", ip, err)
 		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	handler := &Handler{db: db}
@@ -529,8 +530,8 @@ func TestListIPBansPaginates(t *testing.T) {
 	if payload.Total != 3 || payload.Page != 2 || payload.PageSize != 2 {
 		t.Fatalf("pagination = total %d page %d page_size %d, want 3/2/2", payload.Total, payload.Page, payload.PageSize)
 	}
-	if len(payload.Bans) != 1 || payload.Bans[0].IP != "203.0.113.12" {
-		t.Fatalf("bans = %#v, want second page with 203.0.113.12", payload.Bans)
+	if len(payload.Bans) != 1 || payload.Bans[0].IP != "203.0.113.10" {
+		t.Fatalf("bans = %#v, want second page with oldest 203.0.113.10", payload.Bans)
 	}
 }
 
@@ -555,6 +556,7 @@ func TestGetPublicIPBansReturnsTopTwentyAndSupportsIPQuery(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("CreateIPBan(%s) 返回错误: %v", ip, err)
 		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	handler := &Handler{db: db}
@@ -573,6 +575,9 @@ func TestGetPublicIPBansReturnsTopTwentyAndSupportsIPQuery(t *testing.T) {
 	}
 	if payload.Total != 25 || payload.Page != 1 || payload.PageSize != 20 || len(payload.Bans) != 20 {
 		t.Fatalf("pagination = total %d page %d page_size %d len %d, want 25/1/20/20", payload.Total, payload.Page, payload.PageSize, len(payload.Bans))
+	}
+	if payload.Bans[0].IP != "203.0.113.25" || payload.Bans[19].IP != "203.0.113.6" {
+		t.Fatalf("public bans order = first %s last %s, want newest first 25..6", payload.Bans[0].IP, payload.Bans[19].IP)
 	}
 
 	queryRecorder := httptest.NewRecorder()
