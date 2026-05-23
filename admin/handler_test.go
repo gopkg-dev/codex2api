@@ -356,6 +356,7 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		"ip_auto_ban_enabled": true,
 		"ip_auto_ban_duration_minutes": 45,
 		"filter_local_fallback_response": false,
+		"disable_fast_service_tier": true,
 		"api_key_disabled_message": "这个 API Key 已暂停使用",
 		"api_maintenance_enabled": true,
 		"api_maintenance_message": "维护中",
@@ -380,6 +381,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if payload.FilterLocalFallbackResponse {
 		t.Fatal("FilterLocalFallbackResponse = true, want false")
 	}
+	if !payload.DisableFastServiceTier {
+		t.Fatal("DisableFastServiceTier = false, want true")
+	}
 	if payload.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
 		t.Fatalf("APIKeyDisabledMessage = %q, want custom message", payload.APIKeyDisabledMessage)
 	}
@@ -403,6 +407,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if gotSettings.FilterLocalFallbackResponse {
 		t.Fatal("persisted FilterLocalFallbackResponse = true, want false")
 	}
+	if !gotSettings.DisableFastServiceTier {
+		t.Fatal("persisted DisableFastServiceTier = false, want true")
+	}
 	if gotSettings.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
 		t.Fatalf("persisted APIKeyDisabledMessage = %q, want custom message", gotSettings.APIKeyDisabledMessage)
 	}
@@ -424,6 +431,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	runtimeCfg := proxy.CurrentRuntimeSettings()
 	if runtimeCfg.FilterLocalFallbackResponse {
 		t.Fatal("runtime FilterLocalFallbackResponse = true, want false")
+	}
+	if !runtimeCfg.DisableFastServiceTier {
+		t.Fatal("runtime DisableFastServiceTier = false, want true")
 	}
 	if runtimeCfg.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
 		t.Fatalf("runtime APIKeyDisabledMessage = %q, want custom message", runtimeCfg.APIKeyDisabledMessage)

@@ -1176,6 +1176,7 @@ func (h *Handler) Responses(c *gin.Context) {
 	}
 
 	rawBody = normalizeServiceTierField(rawBody)
+	rawBody = applyServiceTierRuntimePolicy(rawBody, CurrentRuntimeSettings())
 	if err := ValidateResponsesFunctionNames(rawBody); err != nil {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidParameter, err.Error(), api.ErrorTypeInvalidRequest))
 		return
@@ -1959,6 +1960,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 	}
 
 	rawBody = normalizeServiceTierField(rawBody)
+	rawBody = applyServiceTierRuntimePolicy(rawBody, CurrentRuntimeSettings())
 	if err := ValidateResponsesFunctionNames(rawBody); err != nil {
 		api.SendError(c, api.NewAPIError(api.ErrCodeInvalidParameter, err.Error(), api.ErrorTypeInvalidRequest))
 		return
@@ -2211,6 +2213,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 	if h.inspectPromptFilterOpenAI(c, rawBody, "/v1/chat/completions", model) {
 		return
 	}
+
+	rawBody = normalizeServiceTierField(rawBody)
+	rawBody = applyServiceTierRuntimePolicy(rawBody, CurrentRuntimeSettings())
 
 	isStream := gjson.GetBytes(rawBody, "stream").Bool()
 	reasoningEffort := extractReasoningEffort(rawBody)

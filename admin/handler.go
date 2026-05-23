@@ -3886,6 +3886,7 @@ type settingsResponse struct {
 	StreamFlushPolicy                string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            int    `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      bool   `json:"filter_local_fallback_response"`
+	DisableFastServiceTier           bool   `json:"disable_fast_service_tier"`
 	APIKeyDisabledMessage            string `json:"api_key_disabled_message"`
 	APIMaintenanceEnabled            bool   `json:"api_maintenance_enabled"`
 	APIMaintenanceMessage            string `json:"api_maintenance_message"`
@@ -3955,6 +3956,7 @@ type updateSettingsReq struct {
 	StreamFlushPolicy                *string `json:"stream_flush_policy"`
 	StreamFlushIntervalMS            *int    `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      *bool   `json:"filter_local_fallback_response"`
+	DisableFastServiceTier           *bool   `json:"disable_fast_service_tier"`
 	APIKeyDisabledMessage            *string `json:"api_key_disabled_message"`
 	APIMaintenanceEnabled            *bool   `json:"api_maintenance_enabled"`
 	APIMaintenanceMessage            *string `json:"api_maintenance_message"`
@@ -4403,6 +4405,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
@@ -4737,6 +4740,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.FilterLocalFallbackResponse = *req.FilterLocalFallbackResponse
 		log.Printf("设置已更新: filter_local_fallback_response = %t", runtimeCfg.FilterLocalFallbackResponse)
 	}
+	if req.DisableFastServiceTier != nil {
+		runtimeCfg.DisableFastServiceTier = *req.DisableFastServiceTier
+		log.Printf("设置已更新: disable_fast_service_tier = %t", runtimeCfg.DisableFastServiceTier)
+	}
 	if req.APIKeyDisabledMessage != nil {
 		runtimeCfg.APIKeyDisabledMessage = *req.APIKeyDisabledMessage
 		log.Printf("设置已更新: api_key_disabled_message")
@@ -4989,6 +4996,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		ImageStorageConfig:               imgConfigJSON,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
 	})
@@ -5071,6 +5079,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
+		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
 		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
 		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,

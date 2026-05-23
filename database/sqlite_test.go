@@ -289,6 +289,7 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 		IPQPSLimit:                   3,
 		IPRPMLimit:                   7,
 		FilterLocalFallbackResponse:  true,
+		DisableFastServiceTier:       true,
 		APIMaintenanceConfig:         `{"enabled":true,"message":"维护中"}`,
 	}
 
@@ -305,6 +306,9 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	}
 	if !got.FilterLocalFallbackResponse {
 		t.Fatal("FilterLocalFallbackResponse = false, want true")
+	}
+	if !got.DisableFastServiceTier {
+		t.Fatal("DisableFastServiceTier = false, want true")
 	}
 	if got.APIMaintenanceConfig != `{"enabled":true,"message":"维护中"}` {
 		t.Fatalf("APIMaintenanceConfig = %q", got.APIMaintenanceConfig)

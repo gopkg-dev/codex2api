@@ -31,6 +31,7 @@ type RuntimeSettings struct {
 	StreamFlushPolicy           string
 	StreamFlushIntervalMS       int
 	FilterLocalFallbackResponse bool
+	DisableFastServiceTier      bool
 	APIKeyDisabledMessage       string
 	APIMaintenance              APIMaintenanceConfig
 }
@@ -48,6 +49,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		StreamFlushPolicy:           defaultStreamFlushPolicy,
 		StreamFlushIntervalMS:       defaultStreamFlushIntervalMS,
 		FilterLocalFallbackResponse: true,
+		DisableFastServiceTier:      false,
 		APIKeyDisabledMessage:       defaultAPIKeyDisabledMessage,
 		APIMaintenance:              DefaultAPIMaintenanceConfig(),
 	}
@@ -108,6 +110,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.StreamFlushPolicy = settings.StreamFlushPolicy
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
 		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
+		next.DisableFastServiceTier = settings.DisableFastServiceTier
 		next.APIKeyDisabledMessage = settings.APIKeyDisabledMessage
 		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)
 	}

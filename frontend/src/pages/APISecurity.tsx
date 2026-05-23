@@ -58,6 +58,7 @@ type SecurityForm = Pick<
   | "ip_auto_ban_on_qps"
   | "ip_auto_ban_on_rpm"
   | "filter_local_fallback_response"
+  | "disable_fast_service_tier"
   | "api_key_disabled_message"
   | "api_maintenance_enabled"
   | "api_maintenance_message"
@@ -75,6 +76,7 @@ const defaultForm: SecurityForm = {
   ip_auto_ban_on_qps: true,
   ip_auto_ban_on_rpm: true,
   filter_local_fallback_response: true,
+  disable_fast_service_tier: false,
   api_key_disabled_message: "API Key 已被禁用，请联系管理员。",
   api_maintenance_enabled: false,
   api_maintenance_message: "系统维护中，请稍后重试。",
@@ -307,6 +309,7 @@ export default function APISecurity() {
         ip_auto_ban_on_qps: settings.ip_auto_ban_on_qps,
         ip_auto_ban_on_rpm: settings.ip_auto_ban_on_rpm,
         filter_local_fallback_response: settings.filter_local_fallback_response,
+        disable_fast_service_tier: settings.disable_fast_service_tier,
         api_key_disabled_message: settings.api_key_disabled_message,
         api_maintenance_enabled: settings.api_maintenance_enabled,
         api_maintenance_message: settings.api_maintenance_message,
@@ -345,6 +348,7 @@ export default function APISecurity() {
         ip_auto_ban_duration_minutes: updated.ip_auto_ban_duration_minutes,
         ip_auto_ban_on_qps: updated.ip_auto_ban_on_qps,
         ip_auto_ban_on_rpm: updated.ip_auto_ban_on_rpm,
+        disable_fast_service_tier: updated.disable_fast_service_tier,
       }));
       showToast("API 防护设置已保存");
     } catch (error) {
@@ -784,6 +788,25 @@ export default function APISecurity() {
                     }))
                   }
                   label="过滤本地回退响应"
+                />
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-sm font-semibold">关闭 OpenAI Fast</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    拦截 service_tier=fast/priority，按普通请求透传给 OpenAI
+                    网关。
+                  </p>
+                </div>
+                <ToggleSwitch
+                  checked={form.disable_fast_service_tier}
+                  onChange={(checked) =>
+                    setForm((f) => ({
+                      ...f,
+                      disable_fast_service_tier: checked,
+                    }))
+                  }
+                  label="关闭 OpenAI Fast"
                 />
               </div>
               <div className="flex items-start justify-between gap-4">

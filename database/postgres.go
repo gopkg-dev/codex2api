@@ -615,6 +615,7 @@ func (db *DB) migrate(ctx context.Context) error {
 			usage_probe_max_age_minutes INT DEFAULT 10,
 			recovery_probe_interval_minutes INT DEFAULT 30,
 			scheduler_mode VARCHAR(20) DEFAULT 'round_robin',
+			disable_fast_service_tier BOOLEAN DEFAULT FALSE,
 			api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。'
 		);
 	CREATE TABLE IF NOT EXISTS account_model_cooldowns (
@@ -674,6 +675,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_interval_ms INT DEFAULT 20;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS image_storage_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS filter_local_fallback_response BOOLEAN DEFAULT TRUE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS disable_fast_service_tier BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_maintenance_config TEXT DEFAULT '{}';
 	UPDATE system_settings
@@ -1182,6 +1184,7 @@ type SystemSettings struct {
 	StreamFlushIntervalMS            int
 	ImageStorageConfig               string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
 	FilterLocalFallbackResponse      bool
+	DisableFastServiceTier           bool
 	APIKeyDisabledMessage            string
 	APIMaintenanceConfig             string // JSON: {"enabled":false,"message":"...","routes":{...}}
 }
@@ -1228,6 +1231,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(stream_flush_interval_ms, 20),
 		       COALESCE(image_storage_config, '{}'),
 		       COALESCE(filter_local_fallback_response, true),
+		       COALESCE(disable_fast_service_tier, false),
 		       COALESCE(api_key_disabled_message, 'API Key 已被禁用，请联系管理员。'),
 		       COALESCE(api_maintenance_config, '{}')
 		FROM system_settings WHERE id = 1
@@ -1247,7 +1251,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.PromptFilterCustomPatterns, &s.PromptFilterDisabledPatterns,
 		&s.ClientCompatMode, &s.CodexMinCLIVersion, &s.UsageLogMode, &s.UsageLogBatchSize,
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
-		&s.ImageStorageConfig, &s.FilterLocalFallbackResponse, &s.APIKeyDisabledMessage, &s.APIMaintenanceConfig,
+		&s.ImageStorageConfig, &s.FilterLocalFallbackResponse, &s.DisableFastServiceTier, &s.APIKeyDisabledMessage, &s.APIMaintenanceConfig,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1274,9 +1278,9 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				prompt_filter_sensitive_words, prompt_filter_custom_patterns, prompt_filter_disabled_patterns,
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
-				image_storage_config, scheduler_mode, filter_local_fallback_response, api_key_disabled_message, api_maintenance_config
+				image_storage_config, scheduler_mode, filter_local_fallback_response, disable_fast_service_tier, api_key_disabled_message, api_maintenance_config
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1330,6 +1334,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				image_storage_config = EXCLUDED.image_storage_config,
 				scheduler_mode = EXCLUDED.scheduler_mode,
 				filter_local_fallback_response = EXCLUDED.filter_local_fallback_response,
+				disable_fast_service_tier = EXCLUDED.disable_fast_service_tier,
 				api_key_disabled_message = EXCLUDED.api_key_disabled_message,
 				api_maintenance_config = EXCLUDED.api_maintenance_config
 		`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
@@ -1342,7 +1347,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.PromptFilterSensitiveWords, s.PromptFilterCustomPatterns, s.PromptFilterDisabledPatterns,
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
-		s.ImageStorageConfig, s.SchedulerMode, s.FilterLocalFallbackResponse, strings.TrimSpace(s.APIKeyDisabledMessage), s.APIMaintenanceConfig)
+		s.ImageStorageConfig, s.SchedulerMode, s.FilterLocalFallbackResponse, s.DisableFastServiceTier, strings.TrimSpace(s.APIKeyDisabledMessage), s.APIMaintenanceConfig)
 	if err != nil {
 		return err
 	}

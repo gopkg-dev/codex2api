@@ -23,6 +23,49 @@ func TestNormalizeServiceTierField(t *testing.T) {
 	}
 }
 
+func TestApplyServiceTierRuntimePolicyDropsFastWhenDisabled(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+	}{
+		{name: "snake fast", raw: `{"model":"gpt-5.4","service_tier":"fast"}`},
+		{name: "camel priority", raw: `{"model":"gpt-5.4","serviceTier":"priority"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := applyServiceTierRuntimePolicy([]byte(tt.raw), RuntimeSettings{DisableFastServiceTier: true})
+
+			if gjson.GetBytes(got, "service_tier").Exists() {
+				t.Fatalf("service_tier should be removed, got body=%s", got)
+			}
+			if gjson.GetBytes(got, "serviceTier").Exists() {
+				t.Fatalf("serviceTier should be removed, got body=%s", got)
+			}
+		})
+	}
+}
+
+func TestApplyServiceTierRuntimePolicyKeepsAllowedTiers(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5.4","service_tier":"flex"}`)
+
+	got := applyServiceTierRuntimePolicy(raw, RuntimeSettings{DisableFastServiceTier: true})
+
+	if tier := gjson.GetBytes(got, "service_tier").String(); tier != "flex" {
+		t.Fatalf("service_tier = %q, want flex", tier)
+	}
+}
+
+func TestApplyServiceTierRuntimePolicyKeepsFastWhenEnabled(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5.4","service_tier":"fast"}`)
+
+	got := applyServiceTierRuntimePolicy(raw, RuntimeSettings{DisableFastServiceTier: false})
+
+	if tier := gjson.GetBytes(got, "service_tier").String(); tier != "fast" {
+		t.Fatalf("service_tier = %q, want fast", tier)
+	}
+}
+
 func TestResolveServiceTier(t *testing.T) {
 	if got := resolveServiceTier("fast", "default"); got != "fast" {
 		t.Fatalf("expected actual tier to win, got %q", got)

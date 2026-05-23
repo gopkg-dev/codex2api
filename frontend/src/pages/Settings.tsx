@@ -528,6 +528,7 @@ export default function Settings() {
     stream_flush_policy: "immediate",
     stream_flush_interval_ms: 20,
     filter_local_fallback_response: true,
+    disable_fast_service_tier: false,
     api_key_disabled_message: "API Key 已被禁用，请联系管理员。",
     api_maintenance_enabled: false,
     api_maintenance_message: "系统维护中，请稍后重试。",

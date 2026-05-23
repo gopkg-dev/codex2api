@@ -1753,6 +1753,22 @@ func normalizeServiceTierField(body []byte) []byte {
 	return body
 }
 
+func applyServiceTierRuntimePolicy(body []byte, settings RuntimeSettings) []byte {
+	if !settings.DisableFastServiceTier {
+		return body
+	}
+	tier := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "service_tier").String()))
+	if tier == "" {
+		tier = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "serviceTier").String()))
+	}
+	switch tier {
+	case "fast", "priority":
+		body, _ = sjson.DeleteBytes(body, "service_tier")
+		body, _ = sjson.DeleteBytes(body, "serviceTier")
+	}
+	return body
+}
+
 func sanitizeServiceTierForUpstream(body []byte) []byte {
 	tier := strings.TrimSpace(gjson.GetBytes(body, "service_tier").String())
 	if tier == "" {
