@@ -73,6 +73,8 @@ const IP_STATS_WINDOWS: Array<{ key: IPStatsWindow; label: string }> = [
 ];
 const QQ_GROUP_NUMBER = "1054851130";
 const QQ_GROUP_URL = "https://qm.qq.com/q/PphhfxKPee";
+const QQ_GROUP_JUMP_URL =
+  "tencent://groupwpa/?subcmd=all&param=7B2267726F757055696E223A2231303534383531313330222C2274696D655374616D70223A313737393533343939313332342C22617574684B6579223A225A36527257644F684B38332F4F52616B7431486D51725179397A34486A4A59645133766133354C496D546B324E4432614963716349433976446B50394D694F63222C2261757468223A22227D&jump_from=";
 const CC_SWITCH_PROTOCOL_ERROR =
   "CC-Switch 未安装或协议处理程序未注册。请先安装 CC-Switch 或手动复制 API 密钥。";
 const CLAUDE_CC_SWITCH_IMPORT_TIP =
@@ -123,6 +125,7 @@ export default function PublicHome() {
   const ipStatsWindowRef = useRef<IPStatsWindow>("5m");
   const overviewRequestSeq = useRef(0);
   const ipStatsLoadSeq = useRef(0);
+  const qqGroupJumped = useRef(false);
 
   const loadOverview = useCallback(async (ipWindow?: IPStatsWindow) => {
     const requestSeq = overviewRequestSeq.current + 1;
@@ -185,6 +188,12 @@ export default function PublicHome() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (qqGroupJumped.current) return;
+    qqGroupJumped.current = true;
+    window.location.href = QQ_GROUP_JUMP_URL;
+  }, []);
 
   const showPendingCcSwitchSuccessTip = useCallback(() => {
     if (
