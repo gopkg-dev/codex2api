@@ -220,15 +220,13 @@ function isPastDate(value: string | undefined, now: number) {
   return time !== null && time <= now;
 }
 
+function isBanActive(ban: IPBan, now: number) {
+  if (!ban.enabled || ban.unbanned_at) return false;
+  return !isPastDate(ban.expires_at, now);
+}
+
 function banStatus(ban: IPBan, now: number) {
-  if (ban.unbanned_at) {
-    return {
-      label: "已解封",
-      className:
-        "border-slate-500/25 bg-slate-500/10 text-slate-600 dark:text-slate-300",
-    };
-  }
-  if (isPastDate(ban.expires_at, now)) {
+  if (!isBanActive(ban, now)) {
     return {
       label: "已解封",
       className:
@@ -676,7 +674,7 @@ export default function APISecurity() {
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="inline-flex gap-1">
-                            {ban.enabled && !ban.unbanned_at ? (
+                            {isBanActive(ban, now) ? (
                               <Button
                                 variant="outline"
                                 size="sm"
