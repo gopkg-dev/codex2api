@@ -8,7 +8,6 @@ import {
 } from "react";
 import {
   Activity,
-  AlertTriangle,
   CheckCircle2,
   Copy,
   CopyCheck,
@@ -63,7 +62,7 @@ import { useToast } from "../hooks/useToast";
 import { parseChartBucketDate } from "../utils/time";
 
 const PUBLIC_REFRESH_INTERVAL_SECONDS = 5;
-const PUBLIC_TIME_RANGES: TimeRangeKey[] = ["1h", "6h", "24h", "7d"];
+const PUBLIC_TIME_RANGES: TimeRangeKey[] = ["30m", "1h", "3h", "6h", "24h"];
 const PUBLIC_CHART_BUCKET_MINUTES = 1;
 const IP_STATS_WINDOWS: Array<{ key: IPStatsWindow; label: string }> = [
   { key: "1m", label: "1分钟" },
@@ -709,14 +708,27 @@ export default function PublicHome() {
                         minTickGap={18}
                       />
                       <YAxis
+                        yAxisId="rpm"
                         tick={{
-                          fill: "var(--color-muted-foreground)",
+                          fill: "#059669",
                           fontSize: 12,
                         }}
                         tickLine={false}
                         axisLine={{ stroke: "var(--color-border)" }}
                         tickFormatter={formatChartAxisValue}
                         width={56}
+                      />
+                      <YAxis
+                        yAxisId="tpm"
+                        orientation="right"
+                        tick={{
+                          fill: "#7c3aed",
+                          fontSize: 12,
+                        }}
+                        tickLine={false}
+                        axisLine={{ stroke: "var(--color-border)" }}
+                        tickFormatter={formatChartAxisValue}
+                        width={64}
                       />
                       <Tooltip
                         labelFormatter={(_, payload) =>
@@ -738,6 +750,7 @@ export default function PublicHome() {
                       />
                       <Legend wrapperStyle={{ fontSize: 12 }} />
                       <Line
+                        yAxisId="rpm"
                         type="monotone"
                         dataKey="rpm"
                         name="RPM"
@@ -746,6 +759,7 @@ export default function PublicHome() {
                         dot={false}
                       />
                       <Line
+                        yAxisId="tpm"
                         type="monotone"
                         dataKey="tpm"
                         name="TPM"
@@ -1666,15 +1680,7 @@ function MaintenanceStatusCard({
                 }
               />
             </div>
-            {allMaintenance && !loading ? (
-              <div className="flex min-h-20 items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-destructive">
-                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold">全部端点维护中</div>
-                  <div className="mt-1 text-sm leading-6">{statusText}</div>
-                </div>
-              </div>
-            ) : loading ? (
+            {loading ? (
               <div className="flex flex-wrap gap-2">
                 {[0, 1, 2].map((i) => (
                   <div
@@ -1683,7 +1689,7 @@ function MaintenanceStatusCard({
                   />
                 ))}
               </div>
-            ) : routes.length > 0 ? (
+            ) : allMaintenance ? null : routes.length > 0 ? (
               <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
                 {endpointRoutes.map((route) => (
                   <MaintenanceRouteChip key={route.path} route={route} />

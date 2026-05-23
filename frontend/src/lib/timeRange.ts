@@ -1,11 +1,15 @@
-export type TimeRangeKey = '1h' | '6h' | '24h' | '7d' | '30d'
+export type TimeRangeKey = '30m' | '1h' | '3h' | '6h' | '24h' | '7d' | '30d'
 
 export const TIME_RANGE_OPTIONS: TimeRangeKey[] = ['1h', '6h', '24h', '7d', '30d']
 
 export function getBucketConfig(range: TimeRangeKey): { bucketMinutes: number; bucketCount: number } {
   switch (range) {
+    case '30m':
+      return { bucketMinutes: 1, bucketCount: 30 }
     case '1h':
       return { bucketMinutes: 5, bucketCount: 12 }
+    case '3h':
+      return { bucketMinutes: 5, bucketCount: 36 }
     case '6h':
       return { bucketMinutes: 15, bucketCount: 24 }
     case '24h':
@@ -34,8 +38,14 @@ export function getTimeRangeISO(range: TimeRangeKey): { start: string; end: stri
   const end = toLocalRFC3339(now)
   let offsetMs: number
   switch (range) {
+    case '30m':
+      offsetMs = 30 * 60 * 1000
+      break
     case '1h':
       offsetMs = 60 * 60 * 1000
+      break
+    case '3h':
+      offsetMs = 3 * 60 * 60 * 1000
       break
     case '6h':
       offsetMs = 6 * 60 * 60 * 1000
