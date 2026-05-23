@@ -770,6 +770,67 @@ func TestRateLimiterLimitsRPMByIPForV1Only(t *testing.T) {
 	}
 }
 
+func TestRateLimiterRPMUsesRollingMinuteWindow(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	now := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
+	rl := NewRateLimiter(0)
+	rl.now = func() time.Time { return now }
+	rl.UpdateIPRPMLimit(10)
+	rl.UpdateIPAutoBanConfig(IPAutoBanConfig{
+		Enabled:  true,
+		Duration: time.Hour,
+		BanOnRPM: true,
+		BanOnQPS: true,
+	})
+	var (
+		bannedIP string
+		reason   string
+	)
+	rl.SetIPAutoBanCallback(func(ip string, banReason string, expiresAt time.Time) {
+		bannedIP = ip
+		reason = banReason
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	for i := 0; i < 10; i++ {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+		req.RemoteAddr = "209.141.46.103:1234"
+		router.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("request %d status = %d, want 200; body=%s", i+1, recorder.Code, recorder.Body.String())
+		}
+		now = now.Add(5 * time.Second)
+	}
+
+	blocked := httptest.NewRecorder()
+	blockedReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	blockedReq.RemoteAddr = "209.141.46.103:5678"
+	router.ServeHTTP(blocked, blockedReq)
+	if blocked.Code != http.StatusOK {
+		t.Fatalf("blocked status = %d, want 200; body=%s", blocked.Code, blocked.Body.String())
+	}
+	if body := blocked.Body.String(); !strings.Contains(body, "已触发RPM限制，已被记录，请稍后重试") {
+		t.Fatalf("blocked body = %s, want RPM protocol message", body)
+	}
+	if bannedIP != "209.141.46.103" || reason != "rpm_limit" {
+		t.Fatalf("auto ban callback = ip=%q reason=%q, want 209.141.46.103 rpm_limit", bannedIP, reason)
+	}
+}
+
 func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()

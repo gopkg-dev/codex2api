@@ -799,7 +799,7 @@ func ComputeCooldown(prevLevel int) (time.Duration, int) {
 type RateLimiter struct {
 	enhanced          *EnhancedRateLimiter
 	ipMu              sync.Mutex
-	ipBuckets         map[string]*tokenBucket
+	ipRPMWindows      map[string][]time.Time
 	ipQPSBuckets      map[string]*tokenBucket
 	ipBans            []ipBanEntry
 	ipQPSLimitAtomic  int64
@@ -809,6 +809,7 @@ type RateLimiter struct {
 	ipAutoBanOnRPM    atomic.Bool
 	ipAutoBanDuration int64
 	ipAutoBanCallback func(ip string, reason string, expiresAt time.Time)
+	now               func() time.Time
 }
 
 type IPBanRule struct {
@@ -838,8 +839,9 @@ type ipBanEntry struct {
 func NewRateLimiter(rpm int) *RateLimiter {
 	return &RateLimiter{
 		enhanced:     NewEnhancedRateLimiter(nil, rpm, 0, 0),
-		ipBuckets:    make(map[string]*tokenBucket),
+		ipRPMWindows: make(map[string][]time.Time),
 		ipQPSBuckets: make(map[string]*tokenBucket),
+		now:          time.Now,
 	}
 }
 
@@ -881,7 +883,7 @@ func (rl *RateLimiter) UpdateIPRPMLimit(limit int) {
 	old := atomic.SwapInt64(&rl.ipRPMLimitAtomic, int64(limit))
 	if old != int64(limit) {
 		rl.ipMu.Lock()
-		rl.ipBuckets = make(map[string]*tokenBucket)
+		rl.ipRPMWindows = make(map[string][]time.Time)
 		rl.ipMu.Unlock()
 	}
 }
@@ -1034,17 +1036,31 @@ func (rl *RateLimiter) allowIPRPM(ip string) bool {
 	if limit <= 0 || ip == "" {
 		return true
 	}
+	now := time.Now()
+	if rl.now != nil {
+		now = rl.now()
+	}
+	cutoff := now.Add(-time.Minute)
 	rl.ipMu.Lock()
-	if rl.ipBuckets == nil {
-		rl.ipBuckets = make(map[string]*tokenBucket)
+	defer rl.ipMu.Unlock()
+	if rl.ipRPMWindows == nil {
+		rl.ipRPMWindows = make(map[string][]time.Time)
 	}
-	bucket := rl.ipBuckets[ip]
-	if bucket == nil {
-		bucket = newTokenBucket(limit)
-		rl.ipBuckets[ip] = bucket
+	window := rl.ipRPMWindows[ip]
+	keepFrom := 0
+	for keepFrom < len(window) && !window[keepFrom].After(cutoff) {
+		keepFrom++
 	}
-	rl.ipMu.Unlock()
-	return bucket.allow()
+	if keepFrom > 0 {
+		window = append(window[:0], window[keepFrom:]...)
+	}
+	if len(window) >= limit {
+		rl.ipRPMWindows[ip] = window
+		return false
+	}
+	window = append(window, now)
+	rl.ipRPMWindows[ip] = window
+	return true
 }
 
 func (rl *RateLimiter) allowIPQPS(ip string) bool {
