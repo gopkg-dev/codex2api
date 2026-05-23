@@ -204,6 +204,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/openai-responses/models", h.FetchOpenAIResponsesModels)
 	api.PATCH("/accounts/:id/openai-responses", h.UpdateOpenAIResponsesAccount)
 	api.POST("/accounts/import", h.ImportAccounts)
+	api.POST("/accounts/sub2api/preview", h.PreviewSub2APIAccounts)
+	api.POST("/accounts/sub2api/import", h.ImportFromSub2API)
 	api.PATCH("/accounts/:id/scheduler", h.UpdateAccountScheduler)
 	api.DELETE("/accounts/:id", h.DeleteAccount)
 	api.POST("/accounts/:id/refresh", h.RefreshAccount)
@@ -1715,6 +1717,7 @@ type importToken struct {
 	email               string
 	idToken             string
 	accountID           string
+	chatgptAccountID    string // sub2api 等导出格式中的 ChatGPT 账号唯一标识，用于精确去重
 	planType            string
 	expiresAt           string
 	codex7DUsedPercent  string
@@ -1732,6 +1735,7 @@ type jsonAccountEntry struct {
 	AccessToken         string                 `json:"access_token"`
 	IDToken             string                 `json:"id_token"`
 	AccountID           string                 `json:"account_id"`
+	ChatGPTAccountID    string                 `json:"chatgpt_account_id"`
 	Email               string                 `json:"email"`
 	Name                string                 `json:"name"`
 	PlanType            string                 `json:"plan_type"`
@@ -1760,6 +1764,7 @@ type sub2apiAccountCredentials struct {
 	AccessToken         string                 `json:"access_token"`
 	IDToken             string                 `json:"id_token"`
 	AccountID           string                 `json:"account_id"`
+	ChatGPTAccountID    string                 `json:"chatgpt_account_id"`
 	Email               string                 `json:"email"`
 	PlanType            string                 `json:"plan_type"`
 	Codex7DUsedPercent  importJSONScalarString `json:"codex_7d_used_percent"`
@@ -1856,6 +1861,7 @@ func jsonAccountEntriesToTokens(entries []jsonAccountEntry) []importToken {
 				email:               email,
 				idToken:             strings.TrimSpace(entry.IDToken),
 				accountID:           strings.TrimSpace(entry.AccountID),
+				chatgptAccountID:    strings.TrimSpace(entry.ChatGPTAccountID),
 				planType:            strings.TrimSpace(entry.PlanType),
 				expiresAt:           firstNonEmpty(entry.ExpiresAt.String(), entry.Expired.String()),
 				codex7DUsedPercent:  strings.TrimSpace(entry.Codex7DUsedPercent.String()),
@@ -1896,6 +1902,7 @@ func parseSub2APIJSONImportTokens(data []byte) []importToken {
 				email:               email,
 				idToken:             strings.TrimSpace(account.Credentials.IDToken),
 				accountID:           strings.TrimSpace(account.Credentials.AccountID),
+				chatgptAccountID:    strings.TrimSpace(account.Credentials.ChatGPTAccountID),
 				planType:            strings.TrimSpace(account.Credentials.PlanType),
 				expiresAt:           firstNonEmpty(account.Credentials.ExpiresAt.String(), account.Credentials.Expired.String()),
 				codex7DUsedPercent:  strings.TrimSpace(account.Credentials.Codex7DUsedPercent.String()),
@@ -1918,6 +1925,8 @@ func (h *Handler) ImportAccounts(c *gin.Context) {
 	switch format {
 	case "json":
 		h.importAccountsJSON(c, proxyURL)
+	case "json_at":
+		h.importAccountsJSONPreferAT(c, proxyURL)
 	case "at_txt":
 		h.importAccountsATTXT(c, proxyURL)
 	default:
@@ -2049,6 +2058,64 @@ func (h *Handler) importAccountsJSON(c *gin.Context, proxyURL string) {
 	h.importAccountsCommon(c, allTokens, proxyURL)
 }
 
+// importAccountsJSONPreferAT 通过 JSON 文件导入，但只信任 access_token，
+// 用于一些导出工具中 refresh_token / session_token 是占位/重复值的场景。
+func (h *Handler) importAccountsJSONPreferAT(c *gin.Context, proxyURL string) {
+	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+		writeError(c, http.StatusBadRequest, "解析表单失败")
+		return
+	}
+
+	files := c.Request.MultipartForm.File["file"]
+	if len(files) == 0 {
+		writeError(c, http.StatusBadRequest, "请上传至少一个 JSON 文件")
+		return
+	}
+
+	var allTokens []importToken
+
+	for _, fh := range files {
+		if err := validateImportFileSize(fh); err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		f, err := fh.Open()
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("打开文件 %s 失败", fh.Filename))
+			return
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("读取文件 %s 失败", fh.Filename))
+			return
+		}
+
+		tokens, err := parseImportJSONTokens(data)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("文件 %s 不是有效的 JSON 格式", fh.Filename))
+			return
+		}
+
+		for _, t := range tokens {
+			if strings.TrimSpace(t.accessToken) == "" {
+				continue
+			}
+			t.refreshToken = ""
+			t.sessionToken = ""
+			allTokens = append(allTokens, t)
+		}
+	}
+
+	if len(allTokens) == 0 {
+		writeError(c, http.StatusBadRequest, "JSON 文件中未找到有效的 access_token")
+		return
+	}
+
+	h.importAccountsCommon(c, allTokens, proxyURL)
+}
+
 // importEvent SSE 导入进度事件
 type importEvent struct {
 	Type      string `json:"type"` // progress | complete
@@ -2075,12 +2142,35 @@ func setupSSE(c *gin.Context) {
 
 // importAccountsCommon 公共的去重、并发插入、SSE 进度推送逻辑（支持 RT 和 AT-only 混合导入）
 func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, proxyURL string) {
-	// 文件内去重（RT、ST 和 AT 分别去重）
+	// 文件内去重：
+	// 1) 当条目带有 chatgpt_account_id 时，以它作为唯一键 —— 这是 ChatGPT 端真正的账号标识，
+	//    可以避免因导出工具误把同一 RT 复制给多个不同账号而被错误合并。
+	// 2) 没有 chatgpt_account_id 时，退回到 RT / ST / AT 顺序去重（兼容旧导出格式）。
+	// 3) 同一份文件内若出现"同一个 RT 对应多个不同 chatgpt_account_id"，
+	//    会被全部保留为独立账号；数据库层面 refresh_token 没有 UNIQUE 约束，因此安全。
+	seenChatGPTID := make(map[string]bool)
 	seenRT := make(map[string]bool)
 	seenST := make(map[string]bool)
 	seenAT := make(map[string]bool)
 	var unique []importToken
 	for _, t := range tokens {
+		if t.chatgptAccountID != "" {
+			if seenChatGPTID[t.chatgptAccountID] {
+				continue
+			}
+			seenChatGPTID[t.chatgptAccountID] = true
+			if t.refreshToken != "" {
+				seenRT[t.refreshToken] = true
+			}
+			if t.sessionToken != "" {
+				seenST[t.sessionToken] = true
+			}
+			if t.accessToken != "" {
+				seenAT[t.accessToken] = true
+			}
+			unique = append(unique, t)
+			continue
+		}
 		if t.refreshToken != "" {
 			if !seenRT[t.refreshToken] {
 				seenRT[t.refreshToken] = true
@@ -2140,16 +2230,41 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 		}
 	}
 
+	// 当导入条目带 chatgpt_account_id 时，按它查数据库已有账号 —— 这是 ChatGPT 端真实的账号唯一标识。
+	hasChatGPTID := false
+	for _, t := range unique {
+		if t.chatgptAccountID != "" {
+			hasChatGPTID = true
+			break
+		}
+	}
+	var existingChatGPTIDs map[string]bool
+	if hasChatGPTID {
+		existingChatGPTIDs, err = h.db.GetAllChatGPTAccountIDs(dedupeCtx)
+		if err != nil {
+			log.Printf("查询已有 chatgpt_account_id 失败: %v", err)
+			existingChatGPTIDs = make(map[string]bool)
+		}
+	}
+
 	var newTokens []importToken
 	duplicateCount := 0
 	for _, t := range unique {
+		// 优先按 chatgpt_account_id 判定数据库内是否已存在该账号；
+		// 命中则跳过，避免同一账号被重复导入。
+		if t.chatgptAccountID != "" && existingChatGPTIDs[t.chatgptAccountID] {
+			duplicateCount++
+			continue
+		}
 		switch {
 		case t.refreshToken != "":
-			if existingRTs[t.refreshToken] {
+			// 已经按 chatgpt_account_id 排除过重复账号；此处仅当条目没有 chatgpt_account_id 时才回退到 RT 去重，
+			// 否则当多个不同账号共享同一 RT（部分导出工具的常见格式）时会被错误判定为重复。
+			if t.chatgptAccountID == "" && existingRTs[t.refreshToken] {
 				duplicateCount++
-			} else if t.sessionToken != "" && existingSTs[t.sessionToken] {
+			} else if t.chatgptAccountID == "" && t.sessionToken != "" && existingSTs[t.sessionToken] {
 				duplicateCount++
-			} else if t.accessToken != "" && existingATs[t.accessToken] {
+			} else if t.chatgptAccountID == "" && t.accessToken != "" && existingATs[t.accessToken] {
 				duplicateCount++
 			} else {
 				newTokens = append(newTokens, t)
@@ -2250,7 +2365,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 					sessionToken:        tok.sessionToken,
 					accessToken:         tok.accessToken,
 					idToken:             tok.idToken,
-					accountID:           tok.accountID,
+					accountID:           firstNonEmpty(tok.accountID, tok.chatgptAccountID),
 					email:               tok.email,
 					planType:            tok.planType,
 					expiresAtRaw:        tok.expiresAt,

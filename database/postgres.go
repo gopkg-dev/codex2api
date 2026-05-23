@@ -3791,6 +3791,32 @@ func (db *DB) GetAllAccessTokens(ctx context.Context) (map[string]bool, error) {
 	return result, rows.Err()
 }
 
+// GetAllChatGPTAccountIDs 获取所有已存在的 chatgpt_account_id（用于导入去重，排除已删除账号）。
+// 兼容历史字段名：account_id / chatgpt_account_id。
+func (db *DB) GetAllChatGPTAccountIDs(ctx context.Context) (map[string]bool, error) {
+	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[string]bool)
+	for rows.Next() {
+		var raw interface{}
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		if id := strings.TrimSpace(credentialString(raw, "chatgpt_account_id")); id != "" {
+			result[id] = true
+			continue
+		}
+		if id := strings.TrimSpace(credentialString(raw, "account_id")); id != "" {
+			result[id] = true
+		}
+	}
+	return result, rows.Err()
+}
+
 func (db *DB) GetAllOpenAIAPIKeys(ctx context.Context) (map[string]bool, error) {
 	rows, err := db.conn.QueryContext(ctx, `SELECT credentials FROM accounts WHERE status <> 'deleted' AND COALESCE(error_message, '') <> 'deleted'`)
 	if err != nil {
