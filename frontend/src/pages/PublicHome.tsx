@@ -38,11 +38,7 @@ import {
 } from "recharts";
 import { api } from "../api";
 import { useBranding } from "../branding";
-import {
-  getBucketConfig,
-  getTimeRangeISO,
-  type TimeRangeKey,
-} from "../lib/timeRange";
+import { getTimeRangeISO, type TimeRangeKey } from "../lib/timeRange";
 import type {
   ChartAggregation,
   IPBan,
@@ -68,6 +64,7 @@ import { parseChartBucketDate } from "../utils/time";
 
 const PUBLIC_REFRESH_INTERVAL_SECONDS = 5;
 const PUBLIC_TIME_RANGES: TimeRangeKey[] = ["1h", "6h", "24h", "7d"];
+const PUBLIC_CHART_BUCKET_MINUTES = 1;
 const IP_STATS_WINDOWS: Array<{ key: IPStatsWindow; label: string }> = [
   { key: "1m", label: "1分钟" },
   { key: "5m", label: "5分钟" },
@@ -149,8 +146,11 @@ export default function PublicHome() {
       }
       try {
         const { start, end } = getTimeRangeISO(timeRange);
-        const { bucketMinutes } = getBucketConfig(timeRange);
-        const res = await api.getPublicChartData({ start, end, bucketMinutes });
+        const res = await api.getPublicChartData({
+          start,
+          end,
+          bucketMinutes: PUBLIC_CHART_BUCKET_MINUTES,
+        });
         if (!controller.signal.aborted) {
           setChartData(res);
         }
@@ -268,7 +268,6 @@ export default function PublicHome() {
 
   const chartPoints = useMemo(() => {
     if (!chartData) return [];
-    const { bucketMinutes } = getBucketConfig(timeRange);
     return chartData.timeline.map((point) => {
       const tokenTotal =
         point.input_tokens +
@@ -279,8 +278,8 @@ export default function PublicHome() {
       return {
         label: formatChartLabel(date, timeRange),
         fullLabel: date.toLocaleString(),
-        rpm: round(point.requests / bucketMinutes, 2),
-        tpm: round(tokenTotal / bucketMinutes, 2),
+        rpm: round(point.requests / PUBLIC_CHART_BUCKET_MINUTES, 2),
+        tpm: round(tokenTotal / PUBLIC_CHART_BUCKET_MINUTES, 2),
       };
     });
   }, [chartData, timeRange]);
@@ -665,7 +664,7 @@ export default function PublicHome() {
                     RPM / TPM 趋势
                   </h2>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    按时间窗口动态聚合
+                    按 1 分钟窗口动态聚合
                   </p>
                 </div>
                 <div className="inline-flex w-fit rounded-lg border border-border bg-muted/50 p-0.5">
