@@ -822,9 +822,12 @@ export default function APISecurity() {
               <div className="rounded-lg border border-border p-4">
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-semibold">下游 Usage 倍数</div>
+                    <div className="text-sm font-semibold">
+                      下游 cached_tokens 倍数
+                    </div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      只调整返回给下游的 usage 数值，后台请求记录保留原始用量。
+                      只调整返回给下游的缓存命中用量，输入、输出、推理和
+                      total 保持原值。
                     </p>
                   </div>
                   <ToggleSwitch
@@ -835,7 +838,7 @@ export default function APISecurity() {
                         downstream_usage_multiplier_enabled: checked,
                       }))
                     }
-                    label="下游 Usage 倍数"
+                    label="下游 cached_tokens 倍数"
                   />
                 </div>
                 <div className="mt-3 max-w-xs">

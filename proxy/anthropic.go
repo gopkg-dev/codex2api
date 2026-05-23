@@ -796,8 +796,6 @@ func (t *anthropicStreamTranslator) handleCompleted(data []byte) []anthropicStre
 			OutputTokens:         t.outputTokens,
 			CacheReadInputTokens: t.cachedTokens,
 		}, CurrentRuntimeSettings())
-		t.inputTokens = scaled.InputTokens
-		t.outputTokens = scaled.OutputTokens
 		t.cachedTokens = scaled.CacheReadInputTokens
 	}
 

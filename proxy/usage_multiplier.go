@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"strings"
 
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -34,12 +35,6 @@ func scaleUsageInfoForDownstream(usage *UsageInfo, settings RuntimeSettings) *Us
 		return usage
 	}
 	scaled := *usage
-	scaled.PromptTokens = scaleUsageNumber(usage.PromptTokens, multiplier)
-	scaled.CompletionTokens = scaleUsageNumber(usage.CompletionTokens, multiplier)
-	scaled.TotalTokens = scaleUsageNumber(usage.TotalTokens, multiplier)
-	scaled.InputTokens = scaleUsageNumber(usage.InputTokens, multiplier)
-	scaled.OutputTokens = scaleUsageNumber(usage.OutputTokens, multiplier)
-	scaled.ReasoningTokens = scaleUsageNumber(usage.ReasoningTokens, multiplier)
 	scaled.CachedTokens = scaleUsageNumber(usage.CachedTokens, multiplier)
 	if usage.PromptTokensDetails != nil {
 		details := *usage.PromptTokensDetails
@@ -65,7 +60,7 @@ func scaleUsageRawForDownstream(raw []byte, settings RuntimeSettings) []byte {
 	if err := decoder.Decode(&value); err != nil {
 		return raw
 	}
-	scaled := scaleUsageValue(value, multiplier)
+	scaled := scaleUsageValue(value, multiplier, "")
 	out, err := json.Marshal(scaled)
 	if err != nil {
 		return raw
@@ -96,21 +91,24 @@ func scaleDownstreamUsageJSON(raw []byte, settings RuntimeSettings) []byte {
 	return out
 }
 
-func scaleUsageValue(value any, multiplier float64) any {
+func scaleUsageValue(value any, multiplier float64, key string) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(v))
 		for key, item := range v {
-			out[key] = scaleUsageValue(item, multiplier)
+			out[key] = scaleUsageValue(item, multiplier, key)
 		}
 		return out
 	case []any:
 		out := make([]any, len(v))
 		for i, item := range v {
-			out[i] = scaleUsageValue(item, multiplier)
+			out[i] = scaleUsageValue(item, multiplier, key)
 		}
 		return out
 	case json.Number:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		if integer, err := v.Int64(); err == nil {
 			return int64(scaleUsageNumber(int(integer), multiplier))
 		}
@@ -119,18 +117,40 @@ func scaleUsageValue(value any, multiplier float64) any {
 		}
 		return v
 	case float64:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		return v * multiplier
 	case float32:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		return float64(v) * multiplier
 	case int:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		return scaleUsageNumber(v, multiplier)
 	case int64:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		return int64(scaleUsageNumber(int(v), multiplier))
 	case int32:
+		if !isCacheUsageKey(key) {
+			return v
+		}
 		return int32(scaleUsageNumber(int(v), multiplier))
 	default:
 		return value
 	}
+}
+
+func isCacheUsageKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	return normalized == "cached_tokens" ||
+		normalized == "cache_read_input_tokens" ||
+		normalized == "cache_creation_input_tokens"
 }
 
 func scaleMaintenanceUsageForDownstream(usage maintenanceUsage, settings RuntimeSettings) maintenanceUsage {
@@ -138,10 +158,7 @@ func scaleMaintenanceUsageForDownstream(usage maintenanceUsage, settings Runtime
 	if multiplier == 1 {
 		return usage
 	}
-	usage.input = scaleUsageNumber(usage.input, multiplier)
 	usage.cached = min(scaleUsageNumber(usage.cached, multiplier), usage.input)
-	usage.output = scaleUsageNumber(usage.output, multiplier)
-	usage.reasoning = min(scaleUsageNumber(usage.reasoning, multiplier), usage.output)
 	return usage
 }
 
@@ -150,8 +167,6 @@ func scaleAnthropicUsageForDownstream(usage anthropicUsage, settings RuntimeSett
 	if multiplier == 1 {
 		return usage
 	}
-	usage.InputTokens = scaleUsageNumber(usage.InputTokens, multiplier)
-	usage.OutputTokens = scaleUsageNumber(usage.OutputTokens, multiplier)
 	usage.CacheCreationInputTokens = scaleUsageNumber(usage.CacheCreationInputTokens, multiplier)
 	usage.CacheReadInputTokens = scaleUsageNumber(usage.CacheReadInputTokens, multiplier)
 	return usage
