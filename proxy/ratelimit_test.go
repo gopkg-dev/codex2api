@@ -1199,6 +1199,47 @@ func TestRateLimiterAutoBanRunsBeforeGlobalRPM(t *testing.T) {
 	}
 }
 
+func TestRateLimiterGlobalRPMOnlyAppliesToV1(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rl := NewRateLimiter(1)
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "home")
+	})
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	homeOne := httptest.NewRecorder()
+	router.ServeHTTP(homeOne, httptest.NewRequest(http.MethodGet, "/", nil))
+	if homeOne.Code != http.StatusOK {
+		t.Fatalf("first home status = %d, want 200; body=%s", homeOne.Code, homeOne.Body.String())
+	}
+
+	homeTwo := httptest.NewRecorder()
+	router.ServeHTTP(homeTwo, httptest.NewRequest(http.MethodGet, "/", nil))
+	if homeTwo.Code != http.StatusOK {
+		t.Fatalf("second home status = %d, want 200; body=%s", homeTwo.Code, homeTwo.Body.String())
+	}
+
+	v1One := httptest.NewRecorder()
+	router.ServeHTTP(v1One, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`)))
+	if v1One.Code != http.StatusOK {
+		t.Fatalf("first /v1 status = %d, want 200; body=%s", v1One.Code, v1One.Body.String())
+	}
+
+	v1Two := httptest.NewRecorder()
+	router.ServeHTTP(v1Two, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`)))
+	if v1Two.Code != http.StatusTooManyRequests {
+		t.Fatalf("second /v1 status = %d, want 429; body=%s", v1Two.Code, v1Two.Body.String())
+	}
+	if !strings.Contains(v1Two.Body.String(), "rate_limit_exceeded") {
+		t.Fatalf("second /v1 body = %s, want global rate limit error", v1Two.Body.String())
+	}
+}
+
 // ============ ComputeCooldown Tests ============
 
 func TestComputeCooldown(t *testing.T) {
