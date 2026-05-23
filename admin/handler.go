@@ -209,6 +209,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/accounts/openai-responses/models", h.FetchOpenAIResponsesModels)
 	api.PATCH("/accounts/:id/openai-responses", h.UpdateOpenAIResponsesAccount)
 	api.POST("/accounts/import", h.ImportAccounts)
+	api.POST("/accounts/sub2api/preview", h.PreviewSub2APIAccounts)
+	api.POST("/accounts/sub2api/import", h.ImportFromSub2API)
 	api.PATCH("/accounts/:id/scheduler", h.UpdateAccountScheduler)
 	api.DELETE("/accounts/:id", h.DeleteAccount)
 	api.POST("/accounts/:id/refresh", h.RefreshAccount)
@@ -420,6 +422,7 @@ type accountResponse struct {
 	ProxyURL                 string                     `json:"proxy_url"`
 	CreatedAt                string                     `json:"created_at"`
 	UpdatedAt                string                     `json:"updated_at"`
+	CodexUsageUpdatedAt      string                     `json:"codex_usage_updated_at,omitempty"`
 	ActiveRequests           int64                      `json:"active_requests"`
 	TotalRequests            int64                      `json:"total_requests"`
 	LastUsedAt               string                     `json:"last_used_at"`
@@ -544,6 +547,7 @@ func (h *Handler) ListAccounts(c *gin.Context) {
 			BaseConcurrencyEffective: effectiveBaseConcurrency(row.BaseConcurrencyOverride, int64(h.store.GetMaxConcurrency())),
 			CreatedAt:                row.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:                row.UpdatedAt.Format(time.RFC3339),
+			CodexUsageUpdatedAt:      row.GetCredential("codex_usage_updated_at"),
 		}
 		if acc, ok := accountMap[row.ID]; ok {
 			acc.Mu().RLock()
@@ -1110,10 +1114,26 @@ func (h *Handler) getAccountUsageWindows(ctx context.Context) (map[int64]*databa
 type addAccountReq struct {
 	Name         string `json:"name"`
 	RefreshToken string `json:"refresh_token"`
+	SessionToken string `json:"session_token"`
 	ProxyURL     string `json:"proxy_url"`
 }
 
-// AddAccount 添加新账号（支持批量：refresh_token 按行分割）
+func splitAccountCredentialLines(raw string, sanitize bool) []string {
+	lines := strings.Split(raw, "\n")
+	tokens := make([]string, 0, len(lines))
+	for _, line := range lines {
+		token := strings.TrimSpace(line)
+		if sanitize {
+			token = strings.TrimSpace(security.SanitizeInput(token))
+		}
+		if token != "" {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
+}
+
+// AddAccount 添加新账号（支持批量：refresh_token/session_token 按行分割）
 func (h *Handler) AddAccount(c *gin.Context) {
 	var req addAccountReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1125,8 +1145,8 @@ func (h *Handler) AddAccount(c *gin.Context) {
 	req.Name = security.SanitizeInput(req.Name)
 	req.ProxyURL = security.SanitizeInput(req.ProxyURL)
 
-	if req.RefreshToken == "" {
-		writeError(c, http.StatusBadRequest, "refresh_token 是必填字段")
+	if strings.TrimSpace(req.RefreshToken) == "" && strings.TrimSpace(req.SessionToken) == "" {
+		writeError(c, http.StatusBadRequest, "refresh_token 或 session_token 是必填字段")
 		return
 	}
 
@@ -1148,23 +1168,40 @@ func (h *Handler) AddAccount(c *gin.Context) {
 		return
 	}
 
-	// 按行分割，支持批量添加
-	lines := strings.Split(req.RefreshToken, "\n")
-	var tokens []string
-	for _, line := range lines {
-		t := strings.TrimSpace(security.SanitizeInput(line))
-		if t != "" {
-			tokens = append(tokens, t)
-		}
+	// 按行分割，支持批量添加。refresh_token 与 session_token 同时填写时，
+	// session_token 可填写一行应用到所有 RT，也可与 RT 行数一一对应。
+	refreshTokens := splitAccountCredentialLines(req.RefreshToken, true)
+	sessionTokens := splitAccountCredentialLines(req.SessionToken, true)
+	total := len(refreshTokens)
+	if total == 0 {
+		total = len(sessionTokens)
+	}
+	if len(refreshTokens) > 0 && len(sessionTokens) > 1 && len(sessionTokens) != len(refreshTokens) {
+		writeError(c, http.StatusBadRequest, "session_token 行数需为 1 或与 refresh_token 行数一致")
+		return
 	}
 
-	if len(tokens) == 0 {
-		writeError(c, http.StatusBadRequest, "未找到有效的 Refresh Token")
+	var seeds []tokenCredentialSeed
+	for i := 0; i < total; i++ {
+		seed := tokenCredentialSeed{}
+		if len(refreshTokens) > 0 {
+			seed.refreshToken = refreshTokens[i]
+		}
+		if len(sessionTokens) == 1 {
+			seed.sessionToken = sessionTokens[0]
+		} else if len(sessionTokens) > 1 {
+			seed.sessionToken = sessionTokens[i]
+		}
+		seeds = append(seeds, seed)
+	}
+
+	if len(seeds) == 0 {
+		writeError(c, http.StatusBadRequest, "未找到有效的 Refresh Token 或 Session Token")
 		return
 	}
 
 	// 限制批量添加数量
-	if len(tokens) > 100 {
+	if len(seeds) > 100 {
 		writeError(c, http.StatusBadRequest, "单次最多添加100个账号")
 		return
 	}
@@ -1175,15 +1212,15 @@ func (h *Handler) AddAccount(c *gin.Context) {
 	successCount := 0
 	failCount := 0
 
-	for i, rt := range tokens {
+	for i, seed := range seeds {
 		name := req.Name
 		if name == "" {
 			name = fmt.Sprintf("account-%d", i+1)
-		} else if len(tokens) > 1 {
+		} else if len(seeds) > 1 {
 			name = fmt.Sprintf("%s-%d", req.Name, i+1)
 		}
 
-		id, err := h.db.InsertAccount(ctx, name, rt, req.ProxyURL)
+		id, err := h.db.InsertAccountWithCredentials(ctx, name, tokenCredentialMap(seed), req.ProxyURL)
 		if err != nil {
 			log.Printf("批量添加账号 %d 失败: %v", i+1, err)
 			failCount++
@@ -1194,23 +1231,21 @@ func (h *Handler) AddAccount(c *gin.Context) {
 		h.db.InsertAccountEventAsync(id, "added", "manual")
 
 		// 热加载：直接加入内存池
-		newAcc := &auth.Account{
-			DBID:         id,
-			RefreshToken: rt,
-			ProxyURL:     req.ProxyURL,
-		}
+		newAcc := accountFromCredentialSeed(id, req.ProxyURL, seed)
 		h.store.AddAccount(newAcc)
 
-		// 异步刷新 AT
-		go func(accountID int64) {
-			refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if err := h.store.RefreshSingle(refreshCtx, accountID); err != nil {
-				log.Printf("新账号 %d 刷新失败: %v", accountID, err)
-			} else {
-				log.Printf("新账号 %d 刷新成功，已加入号池", accountID)
-			}
-		}(id)
+		if !h.store.GetLazyMode() {
+			// 异步刷新 AT
+			go func(accountID int64) {
+				refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				if err := h.store.RefreshSingle(refreshCtx, accountID); err != nil {
+					log.Printf("新账号 %d 刷新失败: %v", accountID, err)
+				} else {
+					log.Printf("新账号 %d 刷新成功，已加入号池", accountID)
+				}
+			}(id)
+		}
 	}
 
 	// 记录安全审计日志
@@ -1803,6 +1838,7 @@ type importToken struct {
 	email               string
 	idToken             string
 	accountID           string
+	chatgptAccountID    string // sub2api 等导出格式中的 ChatGPT 账号唯一标识，用于精确去重
 	planType            string
 	expiresAt           string
 	codex7DUsedPercent  string
@@ -1820,6 +1856,7 @@ type jsonAccountEntry struct {
 	AccessToken         string                 `json:"access_token"`
 	IDToken             string                 `json:"id_token"`
 	AccountID           string                 `json:"account_id"`
+	ChatGPTAccountID    string                 `json:"chatgpt_account_id"`
 	Email               string                 `json:"email"`
 	Name                string                 `json:"name"`
 	PlanType            string                 `json:"plan_type"`
@@ -1848,6 +1885,7 @@ type sub2apiAccountCredentials struct {
 	AccessToken         string                 `json:"access_token"`
 	IDToken             string                 `json:"id_token"`
 	AccountID           string                 `json:"account_id"`
+	ChatGPTAccountID    string                 `json:"chatgpt_account_id"`
 	Email               string                 `json:"email"`
 	PlanType            string                 `json:"plan_type"`
 	Codex7DUsedPercent  importJSONScalarString `json:"codex_7d_used_percent"`
@@ -1944,6 +1982,7 @@ func jsonAccountEntriesToTokens(entries []jsonAccountEntry) []importToken {
 				email:               email,
 				idToken:             strings.TrimSpace(entry.IDToken),
 				accountID:           strings.TrimSpace(entry.AccountID),
+				chatgptAccountID:    strings.TrimSpace(entry.ChatGPTAccountID),
 				planType:            strings.TrimSpace(entry.PlanType),
 				expiresAt:           firstNonEmpty(entry.ExpiresAt.String(), entry.Expired.String()),
 				codex7DUsedPercent:  strings.TrimSpace(entry.Codex7DUsedPercent.String()),
@@ -1984,6 +2023,7 @@ func parseSub2APIJSONImportTokens(data []byte) []importToken {
 				email:               email,
 				idToken:             strings.TrimSpace(account.Credentials.IDToken),
 				accountID:           strings.TrimSpace(account.Credentials.AccountID),
+				chatgptAccountID:    strings.TrimSpace(account.Credentials.ChatGPTAccountID),
 				planType:            strings.TrimSpace(account.Credentials.PlanType),
 				expiresAt:           firstNonEmpty(account.Credentials.ExpiresAt.String(), account.Credentials.Expired.String()),
 				codex7DUsedPercent:  strings.TrimSpace(account.Credentials.Codex7DUsedPercent.String()),
@@ -2006,6 +2046,8 @@ func (h *Handler) ImportAccounts(c *gin.Context) {
 	switch format {
 	case "json":
 		h.importAccountsJSON(c, proxyURL)
+	case "json_at":
+		h.importAccountsJSONPreferAT(c, proxyURL)
 	case "at_txt":
 		h.importAccountsATTXT(c, proxyURL)
 	default:
@@ -2137,6 +2179,64 @@ func (h *Handler) importAccountsJSON(c *gin.Context, proxyURL string) {
 	h.importAccountsCommon(c, allTokens, proxyURL)
 }
 
+// importAccountsJSONPreferAT 通过 JSON 文件导入，但只信任 access_token，
+// 用于一些导出工具中 refresh_token / session_token 是占位/重复值的场景。
+func (h *Handler) importAccountsJSONPreferAT(c *gin.Context, proxyURL string) {
+	if err := c.Request.ParseMultipartForm(32 << 20); err != nil {
+		writeError(c, http.StatusBadRequest, "解析表单失败")
+		return
+	}
+
+	files := c.Request.MultipartForm.File["file"]
+	if len(files) == 0 {
+		writeError(c, http.StatusBadRequest, "请上传至少一个 JSON 文件")
+		return
+	}
+
+	var allTokens []importToken
+
+	for _, fh := range files {
+		if err := validateImportFileSize(fh); err != nil {
+			writeError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		f, err := fh.Open()
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("打开文件 %s 失败", fh.Filename))
+			return
+		}
+		data, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("读取文件 %s 失败", fh.Filename))
+			return
+		}
+
+		tokens, err := parseImportJSONTokens(data)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, fmt.Sprintf("文件 %s 不是有效的 JSON 格式", fh.Filename))
+			return
+		}
+
+		for _, t := range tokens {
+			if strings.TrimSpace(t.accessToken) == "" {
+				continue
+			}
+			t.refreshToken = ""
+			t.sessionToken = ""
+			allTokens = append(allTokens, t)
+		}
+	}
+
+	if len(allTokens) == 0 {
+		writeError(c, http.StatusBadRequest, "JSON 文件中未找到有效的 access_token")
+		return
+	}
+
+	h.importAccountsCommon(c, allTokens, proxyURL)
+}
+
 // importEvent SSE 导入进度事件
 type importEvent struct {
 	Type      string `json:"type"` // progress | complete
@@ -2163,12 +2263,35 @@ func setupSSE(c *gin.Context) {
 
 // importAccountsCommon 公共的去重、并发插入、SSE 进度推送逻辑（支持 RT 和 AT-only 混合导入）
 func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, proxyURL string) {
-	// 文件内去重（RT、ST 和 AT 分别去重）
+	// 文件内去重：
+	// 1) 当条目带有 chatgpt_account_id 时，以它作为唯一键 —— 这是 ChatGPT 端真正的账号标识，
+	//    可以避免因导出工具误把同一 RT 复制给多个不同账号而被错误合并。
+	// 2) 没有 chatgpt_account_id 时，退回到 RT / ST / AT 顺序去重（兼容旧导出格式）。
+	// 3) 同一份文件内若出现"同一个 RT 对应多个不同 chatgpt_account_id"，
+	//    会被全部保留为独立账号；数据库层面 refresh_token 没有 UNIQUE 约束，因此安全。
+	seenChatGPTID := make(map[string]bool)
 	seenRT := make(map[string]bool)
 	seenST := make(map[string]bool)
 	seenAT := make(map[string]bool)
 	var unique []importToken
 	for _, t := range tokens {
+		if t.chatgptAccountID != "" {
+			if seenChatGPTID[t.chatgptAccountID] {
+				continue
+			}
+			seenChatGPTID[t.chatgptAccountID] = true
+			if t.refreshToken != "" {
+				seenRT[t.refreshToken] = true
+			}
+			if t.sessionToken != "" {
+				seenST[t.sessionToken] = true
+			}
+			if t.accessToken != "" {
+				seenAT[t.accessToken] = true
+			}
+			unique = append(unique, t)
+			continue
+		}
 		if t.refreshToken != "" {
 			if !seenRT[t.refreshToken] {
 				seenRT[t.refreshToken] = true
@@ -2228,16 +2351,41 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 		}
 	}
 
+	// 当导入条目带 chatgpt_account_id 时，按它查数据库已有账号 —— 这是 ChatGPT 端真实的账号唯一标识。
+	hasChatGPTID := false
+	for _, t := range unique {
+		if t.chatgptAccountID != "" {
+			hasChatGPTID = true
+			break
+		}
+	}
+	var existingChatGPTIDs map[string]bool
+	if hasChatGPTID {
+		existingChatGPTIDs, err = h.db.GetAllChatGPTAccountIDs(dedupeCtx)
+		if err != nil {
+			log.Printf("查询已有 chatgpt_account_id 失败: %v", err)
+			existingChatGPTIDs = make(map[string]bool)
+		}
+	}
+
 	var newTokens []importToken
 	duplicateCount := 0
 	for _, t := range unique {
+		// 优先按 chatgpt_account_id 判定数据库内是否已存在该账号；
+		// 命中则跳过，避免同一账号被重复导入。
+		if t.chatgptAccountID != "" && existingChatGPTIDs[t.chatgptAccountID] {
+			duplicateCount++
+			continue
+		}
 		switch {
 		case t.refreshToken != "":
-			if existingRTs[t.refreshToken] {
+			// 已经按 chatgpt_account_id 排除过重复账号；此处仅当条目没有 chatgpt_account_id 时才回退到 RT 去重，
+			// 否则当多个不同账号共享同一 RT（部分导出工具的常见格式）时会被错误判定为重复。
+			if t.chatgptAccountID == "" && existingRTs[t.refreshToken] {
 				duplicateCount++
-			} else if t.sessionToken != "" && existingSTs[t.sessionToken] {
+			} else if t.chatgptAccountID == "" && t.sessionToken != "" && existingSTs[t.sessionToken] {
 				duplicateCount++
-			} else if t.accessToken != "" && existingATs[t.accessToken] {
+			} else if t.chatgptAccountID == "" && t.accessToken != "" && existingATs[t.accessToken] {
 				duplicateCount++
 			} else {
 				newTokens = append(newTokens, t)
@@ -2338,7 +2486,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 					sessionToken:        tok.sessionToken,
 					accessToken:         tok.accessToken,
 					idToken:             tok.idToken,
-					accountID:           tok.accountID,
+					accountID:           firstNonEmpty(tok.accountID, tok.chatgptAccountID),
 					email:               tok.email,
 					planType:            tok.planType,
 					expiresAtRaw:        tok.expiresAt,
@@ -2421,7 +2569,7 @@ func (h *Handler) importAccountsCommon(c *gin.Context, tokens []importToken, pro
 				newAcc := accountFromCredentialSeed(id, proxyURL, seed)
 				h.store.AddAccount(newAcc)
 
-				if tok.accessToken == "" {
+				if tok.accessToken == "" && !h.store.GetLazyMode() {
 					// 后台异步刷新，不阻塞导入流程
 					go func(accountID int64) {
 						refreshCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -3696,6 +3844,7 @@ type settingsResponse struct {
 	BackgroundRefreshIntervalMinutes int    `json:"background_refresh_interval_minutes"`
 	UsageProbeMaxAgeMinutes          int    `json:"usage_probe_max_age_minutes"`
 	RecoveryProbeIntervalMinutes     int    `json:"recovery_probe_interval_minutes"`
+	LazyMode                         bool   `json:"lazy_mode"`
 	ProxyURL                         string `json:"proxy_url"`
 	PgMaxConns                       int    `json:"pg_max_conns"`
 	RedisPoolSize                    int    `json:"redis_pool_size"`
@@ -3770,6 +3919,7 @@ type updateSettingsReq struct {
 	BackgroundRefreshIntervalMinutes *int    `json:"background_refresh_interval_minutes"`
 	UsageProbeMaxAgeMinutes          *int    `json:"usage_probe_max_age_minutes"`
 	RecoveryProbeIntervalMinutes     *int    `json:"recovery_probe_interval_minutes"`
+	LazyMode                         *bool   `json:"lazy_mode"`
 	ProxyURL                         *string `json:"proxy_url"`
 	PgMaxConns                       *int    `json:"pg_max_conns"`
 	RedisPoolSize                    *int    `json:"redis_pool_size"`
@@ -4212,6 +4362,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
 		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                         h.store.GetLazyMode(),
 		ProxyURL:                         h.store.GetProxyURL(),
 		PgMaxConns:                       h.pgMaxConns,
 		RedisPoolSize:                    h.redisPoolSize,
@@ -4437,6 +4588,11 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		}
 		h.store.SetRecoveryProbeInterval(time.Duration(v) * time.Minute)
 		log.Printf("设置已更新: recovery_probe_interval_minutes = %d", v)
+	}
+
+	if req.LazyMode != nil {
+		h.store.SetLazyMode(*req.LazyMode)
+		log.Printf("设置已更新: lazy_mode = %t", *req.LazyMode)
 	}
 
 	if req.ProxyURL != nil {
@@ -4796,6 +4952,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
 		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                         h.store.GetLazyMode(),
 		ProxyURL:                         h.store.GetProxyURL(),
 		PgMaxConns:                       h.pgMaxConns,
 		RedisPoolSize:                    h.redisPoolSize,
@@ -4872,6 +5029,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		BackgroundRefreshIntervalMinutes: h.store.GetBackgroundRefreshIntervalMinutes(),
 		UsageProbeMaxAgeMinutes:          h.store.GetUsageProbeMaxAgeMinutes(),
 		RecoveryProbeIntervalMinutes:     h.store.GetRecoveryProbeIntervalMinutes(),
+		LazyMode:                         h.store.GetLazyMode(),
 		ProxyURL:                         h.store.GetProxyURL(),
 		PgMaxConns:                       h.pgMaxConns,
 		RedisPoolSize:                    h.redisPoolSize,

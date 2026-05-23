@@ -1502,19 +1502,21 @@ func (h *Handler) Responses(c *gin.Context) {
 			}
 
 			resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
+			billingServiceTier := resolveBillingServiceTier(actualServiceTier, serviceTier)
 			c.Set("x-service-tier", resolvedServiceTier)
 			logInput := &database.UsageLogInput{
-				AccountID:        account.ID(),
-				Endpoint:         "/v1/responses",
-				Model:            model,
-				StatusCode:       outcome.logStatusCode,
-				DurationMs:       totalDuration,
-				FirstTokenMs:     firstTokenMs,
-				ReasoningEffort:  reasoningEffort,
-				InboundEndpoint:  "/v1/responses",
-				UpstreamEndpoint: upstreamEndpoint,
-				Stream:           isStream,
-				ServiceTier:      resolvedServiceTier,
+				AccountID:          account.ID(),
+				Endpoint:           "/v1/responses",
+				Model:              model,
+				StatusCode:         outcome.logStatusCode,
+				DurationMs:         totalDuration,
+				FirstTokenMs:       firstTokenMs,
+				ReasoningEffort:    reasoningEffort,
+				InboundEndpoint:    "/v1/responses",
+				UpstreamEndpoint:   upstreamEndpoint,
+				Stream:             isStream,
+				ServiceTier:        resolvedServiceTier,
+				BillingServiceTier: billingServiceTier,
 			}
 			if outcome.logStatusCode != http.StatusOK {
 				logInput.ErrorMessage = usageLogErrorMessage(outcome.logStatusCode, []byte(outcome.failureMessage))
@@ -1863,20 +1865,22 @@ func (h *Handler) Responses(c *gin.Context) {
 		}
 
 		resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
+		billingServiceTier := resolveBillingServiceTier(actualServiceTier, serviceTier)
 		c.Set("x-service-tier", resolvedServiceTier)
 
 		logInput := &database.UsageLogInput{
-			AccountID:        account.ID(),
-			Endpoint:         "/v1/responses",
-			Model:            model,
-			StatusCode:       logStatusCode,
-			DurationMs:       totalDuration,
-			FirstTokenMs:     firstTokenMs,
-			ReasoningEffort:  reasoningEffort,
-			InboundEndpoint:  "/v1/responses",
-			UpstreamEndpoint: "/v1/responses",
-			Stream:           isStream,
-			ServiceTier:      resolvedServiceTier,
+			AccountID:          account.ID(),
+			Endpoint:           "/v1/responses",
+			Model:              model,
+			StatusCode:         logStatusCode,
+			DurationMs:         totalDuration,
+			FirstTokenMs:       firstTokenMs,
+			ReasoningEffort:    reasoningEffort,
+			InboundEndpoint:    "/v1/responses",
+			UpstreamEndpoint:   "/v1/responses",
+			Stream:             isStream,
+			ServiceTier:        resolvedServiceTier,
+			BillingServiceTier: billingServiceTier,
 		}
 		if logStatusCode != http.StatusOK {
 			logInput.ErrorMessage = usageLogErrorMessage(logStatusCode, []byte(outcome.failureMessage))
@@ -2119,6 +2123,7 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 
 		actualServiceTier := gjson.GetBytes(respBody, "service_tier").String()
 		resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
+		billingServiceTier := resolveBillingServiceTier(actualServiceTier, serviceTier)
 
 		totalDuration := int(time.Since(start).Milliseconds())
 		statusCode := http.StatusOK
@@ -2130,24 +2135,25 @@ func (h *Handler) ResponsesCompact(c *gin.Context) {
 			errorMessage = localFallbackErrorMessage
 		}
 		h.logUsageForRequest(c, &database.UsageLogInput{
-			AccountID:         account.ID(),
-			Endpoint:          "/v1/responses/compact",
-			Model:             model,
-			StatusCode:        statusCode,
-			DurationMs:        totalDuration,
-			PromptTokens:      promptTokens,
-			CompletionTokens:  completionTokens,
-			TotalTokens:       totalTokens,
-			InputTokens:       promptTokens,
-			OutputTokens:      completionTokens,
-			ReasoningTokens:   reasoningTokens,
-			CachedTokens:      cachedTokens,
-			ReasoningEffort:   reasoningEffort,
-			InboundEndpoint:   "/v1/responses/compact",
-			UpstreamEndpoint:  "/v1/responses/compact",
-			ServiceTier:       resolvedServiceTier,
-			UpstreamErrorKind: errorKind,
-			ErrorMessage:      errorMessage,
+			AccountID:          account.ID(),
+			Endpoint:           "/v1/responses/compact",
+			Model:              model,
+			StatusCode:         statusCode,
+			DurationMs:         totalDuration,
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			TotalTokens:        totalTokens,
+			InputTokens:        promptTokens,
+			OutputTokens:       completionTokens,
+			ReasoningTokens:    reasoningTokens,
+			CachedTokens:       cachedTokens,
+			ReasoningEffort:    reasoningEffort,
+			InboundEndpoint:    "/v1/responses/compact",
+			UpstreamEndpoint:   "/v1/responses/compact",
+			ServiceTier:        resolvedServiceTier,
+			BillingServiceTier: billingServiceTier,
+			UpstreamErrorKind:  errorKind,
+			ErrorMessage:       errorMessage,
 		})
 
 		h.store.Release(account)
@@ -2575,20 +2581,22 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		}
 
 		resolvedServiceTier := resolveServiceTier(actualServiceTier, serviceTier)
+		billingServiceTier := resolveBillingServiceTier(actualServiceTier, serviceTier)
 		c.Set("x-service-tier", resolvedServiceTier)
 
 		logInput := &database.UsageLogInput{
-			AccountID:        account.ID(),
-			Endpoint:         "/v1/chat/completions",
-			Model:            model,
-			StatusCode:       logStatusCode,
-			DurationMs:       totalDuration,
-			FirstTokenMs:     firstTokenMs,
-			ReasoningEffort:  reasoningEffort,
-			InboundEndpoint:  "/v1/chat/completions",
-			UpstreamEndpoint: "/v1/responses",
-			Stream:           isStream,
-			ServiceTier:      resolvedServiceTier,
+			AccountID:          account.ID(),
+			Endpoint:           "/v1/chat/completions",
+			Model:              model,
+			StatusCode:         logStatusCode,
+			DurationMs:         totalDuration,
+			FirstTokenMs:       firstTokenMs,
+			ReasoningEffort:    reasoningEffort,
+			InboundEndpoint:    "/v1/chat/completions",
+			UpstreamEndpoint:   "/v1/responses",
+			Stream:             isStream,
+			ServiceTier:        resolvedServiceTier,
+			BillingServiceTier: billingServiceTier,
 		}
 		if logStatusCode != http.StatusOK {
 			logInput.ErrorMessage = usageLogErrorMessage(logStatusCode, []byte(outcome.failureMessage))
