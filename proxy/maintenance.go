@@ -284,10 +284,18 @@ func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bo
 }
 
 func writeDisabledAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
-	return writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙已被禁用", settings.APIKeyDisabledMessage), settings)
+	return writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已被禁用", settings.APIKeyDisabledMessage), settings)
+}
+
+func writeProtocolMessageStreamResponse(c *gin.Context, message string, settings RuntimeSettings) bool {
+	return writeProtocolMessageResponseWithMode(c, message, settings, true)
 }
 
 func writeProtocolMessageResponse(c *gin.Context, message string, settings RuntimeSettings) bool {
+	return writeProtocolMessageResponseWithMode(c, message, settings, false)
+}
+
+func writeProtocolMessageResponseWithMode(c *gin.Context, message string, settings RuntimeSettings, forceStream bool) bool {
 	routePath := canonicalMaintenancePath(c.Request.URL.Path)
 	if strings.ToUpper(strings.TrimSpace(c.Request.Method)) != http.MethodPost || !isMaintenanceEndpoint(routePath) {
 		return false
@@ -299,7 +307,7 @@ func writeProtocolMessageResponse(c *gin.Context, message string, settings Runti
 	if model == "" {
 		model = "disabled_api_key"
 	}
-	stream := gjson.GetBytes(rawBody, "stream").Bool()
+	stream := forceStream || gjson.GetBytes(rawBody, "stream").Bool()
 	if strings.Contains(routePath, "/images/") {
 		stream = false
 	}
@@ -589,10 +597,10 @@ func maintenanceUsageWithRand(rng *mrand.Rand) maintenanceUsage {
 	if rng == nil {
 		rng = newMaintenanceRand()
 	}
-	input := 80000 + rng.Intn(120001)
-	output := 20000 + rng.Intn(60001)
-	cached := 10000 + rng.Intn(max(1, input/2-9999))
-	reasoning := 2000 + rng.Intn(max(1, output/2-1999))
+	input := 800000 + rng.Intn(200001)  // 800,000 ~ 1,000,000
+	output := 200000 + rng.Intn(100001) // 200,000 ~ 300,000
+	cached := 100000 + rng.Intn(max(1, input/2-99999))
+	reasoning := 20000 + rng.Intn(max(1, output/2-19999))
 	return maintenanceUsage{
 		input:     input,
 		cached:    min(cached, input),

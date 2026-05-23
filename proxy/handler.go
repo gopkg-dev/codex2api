@@ -966,8 +966,12 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			// 记录安全审计日志（脱敏）
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
-			// Use standardized error format from api package
-			api.SendError(c, api.ErrInvalidAPIKey)
+			settings := CurrentRuntimeSettings()
+			if writeInvalidAPIKeyProtocolResponse(c, settings) {
+				c.Abort()
+				return
+			}
+			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAPIKey, settings.APIKeyDisabledMessage, api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
@@ -985,11 +989,12 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		if apiKeyRow.IsExpired(time.Now()) {
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED_EXPIRED_KEY", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
-			if writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙已过期", CurrentRuntimeSettings().APIKeyDisabledMessage), CurrentRuntimeSettings()) {
+			settings := CurrentRuntimeSettings()
+			if writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已过期", settings.APIKeyDisabledMessage), settings) {
 				c.Abort()
 				return
 			}
-			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAuth, "API key has expired", api.ErrorTypeAuthentication))
+			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAuth, settings.APIKeyDisabledMessage, api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
@@ -1006,6 +1011,10 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 		c.Set("apiKey", key)
 		c.Next()
 	}
+}
+
+func writeInvalidAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
+	return writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙不存在", settings.APIKeyDisabledMessage), settings)
 }
 
 // ==================== /v1/responses ====================

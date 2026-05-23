@@ -151,7 +151,95 @@ func TestAuthMiddlewareRejectsDisabledAPIKeyWithConfiguredMessage(t *testing.T) 
 	}
 }
 
-func TestAuthMiddlewareDisabledAPIKeyUsesProtocolJSONResponse(t *testing.T) {
+func TestAuthMiddlewareRejectsInvalidAPIKeyWithConfiguredMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "联系管理员处理"})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.InsertAPIKey(context.Background(), "valid", "sk-valid-client-1234567890"); err != nil {
+		t.Fatalf("InsertAPIKey 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.GET("/v1/test", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/test", nil)
+	req.Header.Set("Authorization", "Bearer sk-missing-client-1234567890")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusUnauthorized, recorder.Body.String())
+	}
+	var payload struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Error.Code != string(api.ErrCodeInvalidAPIKey) || payload.Error.Message != "联系管理员处理" {
+		t.Fatalf("error = %#v, want invalid api key code and configured message", payload.Error)
+	}
+}
+
+func TestAuthMiddlewareInvalidAPIKeyUsesProtocolStreamResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIKeyDisabledMessage: "联系管理员处理",
+		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := db.InsertAPIKey(context.Background(), "valid", "sk-valid-stream-1234567890"); err != nil {
+		t.Fatalf("InsertAPIKey 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.POST("/v1/chat/completions", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	req.Header.Set("Authorization", "Bearer sk-missing-stream-1234567890")
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙不存在，联系管理员处理") || !strings.Contains(body, "data: [DONE]") {
+		t.Fatalf("stream body missing expected invalid-key chunks: %s", body)
+	}
+}
+
+func TestAuthMiddlewareDisabledAPIKeyForcesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
@@ -190,9 +278,12 @@ func TestAuthMiddlewareDisabledAPIKeyUsesProtocolJSONResponse(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
 	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "密匙已被禁用，联系管理员处理") || !strings.Contains(body, `"status":"completed"`) {
-		t.Fatalf("body = %s, want protocol JSON disabled message", body)
+	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已被禁用，联系管理员处理") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("stream body missing expected forced disabled-key chunks: %s", body)
 	}
 }
 
@@ -289,6 +380,54 @@ func TestAuthMiddlewareExpiredAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 	body := recorder.Body.String()
 	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已过期，联系管理员处理") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body missing expected expired-key chunks: %s", body)
+	}
+}
+
+func TestAuthMiddlewareExpiredAPIKeyForcesProtocolStreamResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIKeyDisabledMessage: "联系管理员处理",
+		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	key := "sk-expired-forced-stream-1234567890"
+	if _, err := db.InsertAPIKeyWithOptions(context.Background(), database.APIKeyInput{
+		Name:      "Expired Forced Stream Client",
+		Key:       key,
+		ExpiresAt: sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true},
+	}); err != nil {
+		t.Fatalf("InsertAPIKeyWithOptions 返回错误: %v", err)
+	}
+
+	handler := &Handler{db: db}
+	router := gin.New()
+	router.POST("/v1/responses", handler.authMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4"}`))
+	req.Header.Set("Authorization", "Bearer "+key)
+	router.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream", got)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已过期，联系管理员处理") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("stream body missing expected forced expired-key chunks: %s", body)
 	}
 }
 
@@ -1113,6 +1252,9 @@ func TestAuthMiddlewareSetsAPIKeyContext(t *testing.T) {
 
 func TestAuthMiddlewareRejectsExpiredAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "联系管理员处理"})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 	db, err := database.New("sqlite", dbPath)
@@ -1145,6 +1287,9 @@ func TestAuthMiddlewareRejectsExpiredAPIKey(t *testing.T) {
 	}
 	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != string(api.ErrCodeInvalidAuth) {
 		t.Fatalf("error.code = %q, want %q", got, api.ErrCodeInvalidAuth)
+	}
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.message").String(); got != "联系管理员处理" {
+		t.Fatalf("error.message = %q, want configured message", got)
 	}
 }
 
