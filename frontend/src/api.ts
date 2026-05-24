@@ -15,16 +15,11 @@ import type {
   CreateAPIKeyRequest,
   FetchOpenAIResponsesModelsRequest,
   FetchOpenAIResponsesModelsResponse,
-  CreateImageJobPayload,
   HealthResponse,
-  ImageAssetsResponse,
-  ImagePromptTemplate,
-  ImageJobResponse,
-  ImageJobsResponse,
-  ImagePromptTemplatePayload,
-  ImagePromptTemplatesResponse,
   IPBansResponse,
+  IPStatsSort,
   IPStatsWindow,
+  IPUsageStatsResponse,
   MessageResponse,
   ModelSyncResponse,
   ModelsResponse,
@@ -34,9 +29,6 @@ import type {
   OpsOverviewResponse,
   PublicHomeResponse,
   PublicModelCheckResponse,
-  PromptFilterLogsResponse,
-  PromptFilterRulesResponse,
-  PromptFilterTestResponse,
   SiteBranding,
   StatsResponse,
   CPAExportEntry,
@@ -465,68 +457,6 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(data),
     }),
-  getImagePromptTemplates: (params: { q?: string; tag?: string } = {}) => {
-    const sp = new URLSearchParams();
-    if (params.q) sp.set("q", params.q);
-    if (params.tag) sp.set("tag", params.tag);
-    const query = sp.toString();
-    return request<ImagePromptTemplatesResponse>(
-      `/image-prompts${query ? `?${query}` : ""}`,
-    );
-  },
-  createImagePromptTemplate: (data: ImagePromptTemplatePayload) =>
-    request<{ template: ImagePromptTemplate }>("/image-prompts", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  updateImagePromptTemplate: (id: number, data: ImagePromptTemplatePayload) =>
-    request<{ template: ImagePromptTemplate }>(`/image-prompts/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    }),
-  deleteImagePromptTemplate: (id: number) =>
-    request<MessageResponse>(`/image-prompts/${id}`, { method: "DELETE" }),
-  createImageJob: (data: CreateImageJobPayload) =>
-    request<ImageJobResponse>("/images/jobs", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  createImageEditJob: (data: CreateImageJobPayload) =>
-    request<ImageJobResponse>("/images/edit-jobs", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  getImageJobs: (params: { page?: number; pageSize?: number } = {}) => {
-    const sp = new URLSearchParams();
-    if (params.page) sp.set("page", String(params.page));
-    if (params.pageSize) sp.set("page_size", String(params.pageSize));
-    return request<ImageJobsResponse>(`/images/jobs?${sp.toString()}`);
-  },
-  getImageJob: (id: number, params: { includeCache?: boolean } = {}) => {
-    const sp = new URLSearchParams();
-    if (params.includeCache) sp.set("include_cache", "1");
-    const query = sp.toString();
-    return request<ImageJobResponse>(
-      `/images/jobs/${id}${query ? `?${query}` : ""}`,
-    );
-  },
-  deleteImageJob: (id: number) =>
-    request<MessageResponse>(`/images/jobs/${id}`, { method: "DELETE" }),
-  getImageAssets: (params: { page?: number; pageSize?: number } = {}) => {
-    const sp = new URLSearchParams();
-    if (params.page) sp.set("page", String(params.page));
-    if (params.pageSize) sp.set("page_size", String(params.pageSize));
-    return request<ImageAssetsResponse>(`/images/assets?${sp.toString()}`);
-  },
-  getImageAssetFile: (id: number, download = false, thumbKB = 0) => {
-    const sp = new URLSearchParams();
-    if (download) sp.set("download", "1");
-    if (thumbKB > 0) sp.set("thumb_kb", String(thumbKB));
-    const query = sp.toString();
-    return requestBlob(`/images/assets/${id}/file${query ? `?${query}` : ""}`);
-  },
-  deleteImageAsset: (id: number) =>
-    request<MessageResponse>(`/images/assets/${id}`, { method: "DELETE" }),
   clearUsageLogs: () =>
     request<MessageResponse>("/usage/logs", { method: "DELETE" }),
   getSettings: () => request<SystemSettings>("/settings"),
@@ -545,6 +475,22 @@ export const api = {
     if (params?.page) search.set("page", String(params.page));
     if (params?.pageSize) search.set("page_size", String(params.pageSize));
     return request<IPBansResponse>(`/ip-bans?${search.toString()}`);
+  },
+  getIPUsageStats: (params?: {
+    window?: IPStatsWindow;
+    page?: number;
+    pageSize?: number;
+    sort?: IPStatsSort;
+    order?: "asc" | "desc";
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.window) search.set("window", params.window);
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.pageSize) search.set("page_size", String(params.pageSize));
+    if (params?.sort) search.set("sort", params.sort);
+    if (params?.order) search.set("order", params.order);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return request<IPUsageStatsResponse>(`/ip-stats${suffix}`);
   },
   createIPBan: (data: {
     ip: string;
@@ -575,65 +521,6 @@ export const api = {
     request<MessageResponse>(`/ip-bans/${id}/unban`, { method: "POST" }),
   deleteIPBan: (id: number) =>
     request<MessageResponse>(`/ip-bans/${id}`, { method: "DELETE" }),
-  testImageStorageConnection: (data: {
-    endpoint: string;
-    region: string;
-    bucket: string;
-    access_key: string;
-    secret_key: string;
-    prefix: string;
-    force_path_style: boolean;
-  }) =>
-    request<{ ok: boolean; bucket: string }>("/settings/image-storage/test", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  getPromptFilterLogs: (
-    params:
-      | number
-      | {
-          page?: number;
-          pageSize?: number;
-          limit?: number;
-          source?: string;
-          action?: string;
-          endpoint?: string;
-          model?: string;
-          apiKeyId?: string;
-          q?: string;
-        } = 100,
-  ) => {
-    const search = new URLSearchParams();
-    if (typeof params === "number") {
-      search.set("limit", String(params));
-    } else {
-      if (params.page) search.set("page", String(params.page));
-      if (params.pageSize) search.set("page_size", String(params.pageSize));
-      if (params.limit) search.set("limit", String(params.limit));
-      if (params.source) search.set("source", params.source);
-      if (params.action) search.set("action", params.action);
-      if (params.endpoint) search.set("endpoint", params.endpoint);
-      if (params.model) search.set("model", params.model);
-      if (params.apiKeyId) search.set("api_key_id", params.apiKeyId);
-      if (params.q) search.set("q", params.q);
-    }
-    return request<PromptFilterLogsResponse>(
-      `/prompt-filter/logs?${search.toString()}`,
-    );
-  },
-  clearPromptFilterLogs: () =>
-    request<MessageResponse>("/prompt-filter/logs", { method: "DELETE" }),
-  testPromptFilter: (data: {
-    text: string;
-    endpoint?: string;
-    model?: string;
-  }) =>
-    request<PromptFilterTestResponse>("/prompt-filter/test", {
-      method: "POST",
-      body: JSON.stringify(data),
-    }),
-  getPromptFilterRules: () =>
-    request<PromptFilterRulesResponse>("/prompt-filter/rules"),
   getModels: () => request<ModelsResponse>("/models"),
   syncModels: () =>
     request<ModelSyncResponse>("/models/sync", { method: "POST" }),

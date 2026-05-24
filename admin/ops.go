@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -182,7 +183,7 @@ func (h *Handler) buildOpsOverview(ctx context.Context, ipWindowStart time.Time)
 		return opsOverviewResponse{}, err
 	}
 
-	ipStats, err := h.db.GetIPUsageStats(ctx, 8, ipWindowStart)
+	ipStats, err := h.db.GetIPUsageStats(ctx, 20, ipWindowStart)
 	if err != nil {
 		return opsOverviewResponse{}, err
 	}
@@ -416,6 +417,142 @@ func ipStatStatusRank(status string) int {
 	default:
 		return 0
 	}
+}
+
+type ipUsageStatsResponse struct {
+	Stats    []database.IPUsageStat `json:"stats"`
+	Total    int64                  `json:"total"`
+	Page     int                    `json:"page"`
+	PageSize int                    `json:"page_size"`
+	Sort     string                 `json:"sort"`
+	Order    string                 `json:"order"`
+}
+
+func normalizeIPStatsSort(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "ip", "status", "requests", "rpm", "tpm", "tokens", "cost":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "requests"
+	}
+}
+
+func normalizeSortOrder(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), "asc") {
+		return "asc"
+	}
+	return "desc"
+}
+
+func paginateIPUsageStats(stats []database.IPUsageStat, page, pageSize int) []database.IPUsageStat {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+	start := (page - 1) * pageSize
+	if start >= len(stats) {
+		return []database.IPUsageStat{}
+	}
+	end := start + pageSize
+	if end > len(stats) {
+		end = len(stats)
+	}
+	return stats[start:end]
+}
+
+// GetIPUsageStats 获取后台 IP 使用排行榜，支持时间窗口、分页和排序。
+func (h *Handler) GetIPUsageStats(c *gin.Context) {
+	page := 1
+	if pageStr := c.Query("page"); pageStr != "" {
+		if parsed, err := strconv.Atoi(pageStr); err == nil && parsed > 0 {
+			page = parsed
+		}
+	}
+	pageSize := 20
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if parsed, err := strconv.Atoi(pageSizeStr); err == nil && parsed > 0 && parsed <= 200 {
+			pageSize = parsed
+		}
+	}
+	sortBy := normalizeIPStatsSort(c.Query("sort"))
+	order := normalizeSortOrder(c.Query("order"))
+	windowStart := parseIPStatsWindowStart(firstNonEmpty(c.Query("window"), c.Query("ip_window")), time.Now())
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+
+	settings, err := h.db.GetSystemSettings(ctx)
+	if err != nil {
+		writeInternalError(c, fmt.Errorf("获取系统设置失败: %w", err))
+		return
+	}
+	ipRPMLimit := 0
+	ipQPSLimit := 0
+	if settings != nil {
+		ipRPMLimit = settings.IPRPMLimit
+		ipQPSLimit = settings.IPQPSLimit
+	}
+	activeBans, err := h.db.ListIPBans(ctx, false)
+	if err != nil {
+		writeInternalError(c, fmt.Errorf("获取 IP 黑名单失败: %w", err))
+		return
+	}
+	banned := activeIPBanSet(activeBans)
+
+	if sortBy == "status" {
+		stats, err := h.db.GetIPUsageStats(ctx, 0, windowStart)
+		if err != nil {
+			writeInternalError(c, fmt.Errorf("获取 IP 使用统计失败: %w", err))
+			return
+		}
+		classifyIPStatStatuses(stats, ipRPMLimit, ipQPSLimit, banned)
+		sort.SliceStable(stats, func(i, j int) bool {
+			left := ipStatStatusRank(stats[i].Status)
+			right := ipStatStatusRank(stats[j].Status)
+			if left != right {
+				if order == "asc" {
+					return left < right
+				}
+				return left > right
+			}
+			if stats[i].Requests != stats[j].Requests {
+				return stats[i].Requests > stats[j].Requests
+			}
+			return stats[i].IP < stats[j].IP
+		})
+		c.JSON(200, ipUsageStatsResponse{
+			Stats:    paginateIPUsageStats(stats, page, pageSize),
+			Total:    int64(len(stats)),
+			Page:     page,
+			PageSize: pageSize,
+			Sort:     sortBy,
+			Order:    order,
+		})
+		return
+	}
+
+	pageResult, err := h.db.GetIPUsageStatsPage(ctx, database.IPUsageStatsQuery{
+		Page:        page,
+		PageSize:    pageSize,
+		WindowStart: windowStart,
+		SortBy:      sortBy,
+		SortOrder:   order,
+	})
+	if err != nil {
+		writeInternalError(c, fmt.Errorf("获取 IP 使用统计失败: %w", err))
+		return
+	}
+	classifyIPStatStatuses(pageResult.Stats, ipRPMLimit, ipQPSLimit, banned)
+	c.JSON(200, ipUsageStatsResponse{
+		Stats:    pageResult.Stats,
+		Total:    pageResult.Total,
+		Page:     pageResult.Page,
+		PageSize: pageResult.PageSize,
+		Sort:     sortBy,
+		Order:    order,
+	})
 }
 
 // GetOpsOverview 获取系统运维概览

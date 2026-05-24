@@ -335,7 +335,6 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		UsageLogFlushIntervalSeconds:     5,
 		StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 		StreamFlushIntervalMS:            20,
-		ImageStorageConfig:               "{}",
 		IPQPSLimit:                       2,
 		IPRPMLimit:                       20,
 		IPAutoBanDurationMinutes:         30,

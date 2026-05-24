@@ -376,6 +376,8 @@ export interface PublicMaintenanceRoute {
 }
 
 export type IPStatsWindow = "1m" | "5m" | "15m" | "1h" | "today";
+export type IPStatsSort = "ip" | "status" | "requests" | "rpm" | "tpm" | "tokens" | "cost";
+export type SortOrder = "asc" | "desc";
 
 export interface IPUsageStat {
   ip: string;
@@ -386,6 +388,15 @@ export interface IPUsageStat {
   rpm: number;
   tpm: number;
   status: "normal" | "watch" | "abnormal" | "banned" | string;
+}
+
+export interface IPUsageStatsResponse {
+  stats: IPUsageStat[];
+  total: number;
+  page: number;
+  page_size: number;
+  sort: IPStatsSort;
+  order: SortOrder;
 }
 
 export interface SystemSettings {
@@ -432,15 +443,6 @@ export interface SystemSettings {
   model_mapping: string;
   resin_url: string;
   resin_platform_name: string;
-  prompt_filter_enabled: boolean;
-  prompt_filter_mode: "monitor" | "warn" | "block" | string;
-  prompt_filter_threshold: number;
-  prompt_filter_strict_threshold: number;
-  prompt_filter_log_matches: boolean;
-  prompt_filter_max_text_length: number;
-  prompt_filter_sensitive_words: string;
-  prompt_filter_custom_patterns: string;
-  prompt_filter_disabled_patterns: string;
   client_compat_mode: "preserve" | "auto" | "force" | string;
   codex_min_cli_version: string;
   usage_log_mode: "full" | "errors" | "off" | string;
@@ -456,15 +458,6 @@ export interface SystemSettings {
   api_maintenance_sse_randomize: boolean;
   api_maintenance_image_b64_json: string;
   api_maintenance_routes_json: string;
-  image_storage_backend: "local" | "s3" | string;
-  image_s3_endpoint: string;
-  image_s3_region: string;
-  image_s3_bucket: string;
-  image_s3_access_key: string;
-  image_s3_secret_key: string;
-  image_s3_secret_key_configured?: boolean;
-  image_s3_prefix: string;
-  image_s3_force_path_style: boolean;
 }
 
 export interface IPBan {
@@ -485,73 +478,6 @@ export interface IPBansResponse {
   total: number;
   page: number;
   page_size: number;
-}
-
-export interface PromptFilterMatch {
-  name: string;
-  weight: number;
-  category: string;
-  strict: boolean;
-}
-
-export interface PromptFilterVerdict {
-  enabled: boolean;
-  mode: string;
-  action: "allow" | "warn" | "block" | string;
-  score: number;
-  raw_score: number;
-  threshold: number;
-  strict_hit: boolean;
-  matched: PromptFilterMatch[];
-  text_preview: string;
-  reason: string;
-  extracted_chars: number;
-}
-
-export interface PromptFilterLog {
-  id: number;
-  created_at: ISODateString;
-  source: string;
-  endpoint: string;
-  model: string;
-  action: string;
-  mode: string;
-  score: number;
-  threshold: number;
-  matched_patterns: string;
-  text_preview: string;
-  api_key_id: number;
-  api_key_name: string;
-  api_key_masked: string;
-  client_ip: string;
-  error_code: string;
-}
-
-export interface PromptFilterLogsResponse {
-  logs: PromptFilterLog[];
-  total: number;
-  page: number;
-  page_size: number;
-}
-
-export interface PromptFilterTestResponse {
-  verdict: PromptFilterVerdict;
-}
-
-export interface PromptFilterRule {
-  name: string;
-  pattern: string;
-  weight: number;
-  category?: string;
-  strict?: boolean;
-  enabled?: boolean;
-  builtin?: boolean;
-}
-
-export interface PromptFilterRulesResponse {
-  builtin_patterns: PromptFilterRule[];
-  custom_patterns: PromptFilterRule[];
-  disabled_patterns: string[];
 }
 
 export interface ModelInfo {
@@ -815,106 +741,6 @@ export interface CreateAPIKeyResponse {
   expires_at?: ISODateString | null;
   allowed_group_ids?: number[];
   disabled?: boolean;
-}
-
-export interface ImagePromptTemplate {
-  id: number;
-  name: string;
-  prompt: string;
-  model: string;
-  size: string;
-  quality: string;
-  output_format: string;
-  background: string;
-  style: string;
-  tags: string[];
-  favorite: boolean;
-  usage_count: number;
-  last_used_at?: ISODateString;
-  created_at: ISODateString;
-  updated_at: ISODateString;
-}
-
-export interface ImageAsset {
-  id: number;
-  job_id: number;
-  template_id: number;
-  filename: string;
-  proxy_url?: string;
-  thumbnail_url?: string;
-  mime_type: string;
-  bytes: number;
-  width: number;
-  height: number;
-  model: string;
-  requested_size: string;
-  actual_size: string;
-  quality: string;
-  output_format: string;
-  revised_prompt: string;
-  created_at: ISODateString;
-  cache_b64_json?: string;
-}
-
-export interface ImageGenerationJob {
-  id: number;
-  status: "queued" | "running" | "succeeded" | "failed" | string;
-  prompt: string;
-  params_json: string;
-  api_key_id: number;
-  api_key_name: string;
-  api_key_masked: string;
-  error_message: string;
-  duration_ms: number;
-  created_at: ISODateString;
-  started_at?: ISODateString;
-  completed_at?: ISODateString;
-  assets?: ImageAsset[];
-}
-
-export interface ImagePromptTemplatesResponse {
-  templates: ImagePromptTemplate[];
-}
-
-export interface ImageJobResponse {
-  job: ImageGenerationJob;
-}
-
-export interface ImageJobsResponse {
-  jobs: ImageGenerationJob[];
-  total: number;
-}
-
-export interface ImageAssetsResponse {
-  assets: ImageAsset[];
-  total: number;
-}
-
-export interface ImagePromptTemplatePayload {
-  name?: string;
-  prompt?: string;
-  model?: string;
-  size?: string;
-  quality?: string;
-  output_format?: string;
-  background?: string;
-  style?: string;
-  tags?: string[];
-  favorite?: boolean;
-}
-
-export interface CreateImageJobPayload {
-  prompt: string;
-  model?: string;
-  size?: string;
-  quality?: string;
-  output_format?: string;
-  background?: string;
-  style?: string;
-  upscale?: string;
-  api_key_id?: number;
-  template_id?: number;
-  input_images?: string[];
 }
 
 export type ApiListResponse<K extends string, T> = {

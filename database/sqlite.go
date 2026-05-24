@@ -149,7 +149,6 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				usage_log_flush_interval_seconds INTEGER DEFAULT 5,
 				stream_flush_policy TEXT DEFAULT 'immediate',
 				stream_flush_interval_ms INTEGER DEFAULT 20,
-				image_storage_config TEXT DEFAULT '{}',
 				scheduler_mode TEXT DEFAULT 'round_robin',
 				filter_local_fallback_response INTEGER DEFAULT 1,
 				disable_fast_service_tier INTEGER DEFAULT 0,
@@ -201,73 +200,6 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			event_type TEXT NOT NULL,
 			source TEXT DEFAULT '',
 			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
-		`CREATE TABLE IF NOT EXISTS image_prompt_templates (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			name TEXT NOT NULL DEFAULT '',
-			prompt TEXT NOT NULL DEFAULT '',
-			model TEXT DEFAULT '',
-			size TEXT DEFAULT '',
-			quality TEXT DEFAULT '',
-			output_format TEXT DEFAULT '',
-			background TEXT DEFAULT '',
-			style TEXT DEFAULT '',
-			tags TEXT NOT NULL DEFAULT '[]',
-			favorite INTEGER DEFAULT 0,
-			usage_count INTEGER DEFAULT 0,
-			last_used_at TIMESTAMP NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
-		`CREATE TABLE IF NOT EXISTS image_generation_jobs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			status TEXT NOT NULL DEFAULT 'queued',
-			prompt TEXT NOT NULL DEFAULT '',
-			params_json TEXT NOT NULL DEFAULT '{}',
-			api_key_id INTEGER DEFAULT 0,
-			api_key_name TEXT DEFAULT '',
-			api_key_masked TEXT DEFAULT '',
-			error_message TEXT DEFAULT '',
-			duration_ms INTEGER DEFAULT 0,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			started_at TIMESTAMP NULL,
-			completed_at TIMESTAMP NULL
-		);`,
-		`CREATE TABLE IF NOT EXISTS image_assets (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			job_id INTEGER NOT NULL DEFAULT 0,
-			template_id INTEGER DEFAULT 0,
-			filename TEXT NOT NULL DEFAULT '',
-			storage_path TEXT NOT NULL DEFAULT '',
-			mime_type TEXT NOT NULL DEFAULT '',
-			bytes INTEGER DEFAULT 0,
-			width INTEGER DEFAULT 0,
-			height INTEGER DEFAULT 0,
-			model TEXT DEFAULT '',
-			requested_size TEXT DEFAULT '',
-			actual_size TEXT DEFAULT '',
-			quality TEXT DEFAULT '',
-			output_format TEXT DEFAULT '',
-			revised_prompt TEXT DEFAULT '',
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-		);`,
-		`CREATE TABLE IF NOT EXISTS prompt_filter_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			source TEXT DEFAULT '',
-			endpoint TEXT DEFAULT '',
-			model TEXT DEFAULT '',
-			action TEXT DEFAULT '',
-			mode TEXT DEFAULT '',
-			score INTEGER DEFAULT 0,
-			threshold_value INTEGER DEFAULT 0,
-			matched_patterns TEXT DEFAULT '[]',
-			text_preview TEXT DEFAULT '',
-			api_key_id INTEGER DEFAULT 0,
-			api_key_name TEXT DEFAULT '',
-			api_key_masked TEXT DEFAULT '',
-			client_ip TEXT DEFAULT '',
-			error_code TEXT DEFAULT ''
 		);`,
 	}
 	for _, stmt := range statements {
@@ -354,15 +286,6 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "model_mapping", "TEXT DEFAULT '{}'"},
 		{"system_settings", "resin_url", "TEXT DEFAULT ''"},
 		{"system_settings", "resin_platform_name", "TEXT DEFAULT ''"},
-		{"system_settings", "prompt_filter_enabled", "INTEGER DEFAULT 0"},
-		{"system_settings", "prompt_filter_mode", "TEXT DEFAULT 'monitor'"},
-		{"system_settings", "prompt_filter_threshold", "INTEGER DEFAULT 50"},
-		{"system_settings", "prompt_filter_strict_threshold", "INTEGER DEFAULT 90"},
-		{"system_settings", "prompt_filter_log_matches", "INTEGER DEFAULT 1"},
-		{"system_settings", "prompt_filter_max_text_length", "INTEGER DEFAULT 81920"},
-		{"system_settings", "prompt_filter_sensitive_words", "TEXT DEFAULT ''"},
-		{"system_settings", "prompt_filter_custom_patterns", "TEXT DEFAULT '[]'"},
-		{"system_settings", "prompt_filter_disabled_patterns", "TEXT DEFAULT '[]'"},
 		{"system_settings", "client_compat_mode", "TEXT DEFAULT 'preserve'"},
 		{"system_settings", "codex_min_cli_version", "TEXT DEFAULT '0.118.0'"},
 		{"system_settings", "usage_log_mode", "TEXT DEFAULT 'full'"},
@@ -370,7 +293,6 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "usage_log_flush_interval_seconds", "INTEGER DEFAULT 5"},
 		{"system_settings", "stream_flush_policy", "TEXT DEFAULT 'immediate'"},
 		{"system_settings", "stream_flush_interval_ms", "INTEGER DEFAULT 20"},
-		{"system_settings", "image_storage_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "scheduler_mode", "TEXT DEFAULT 'round_robin'"},
 		{"system_settings", "filter_local_fallback_response", "INTEGER DEFAULT 1"},
 		{"system_settings", "disable_fast_service_tier", "INTEGER DEFAULT 0"},
@@ -424,6 +346,32 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, column := range []string{
+		"prompt_filter_enabled",
+		"prompt_filter_mode",
+		"prompt_filter_threshold",
+		"prompt_filter_strict_threshold",
+		"prompt_filter_log_matches",
+		"prompt_filter_max_text_length",
+		"prompt_filter_sensitive_words",
+		"prompt_filter_custom_patterns",
+		"prompt_filter_disabled_patterns",
+		"image_storage_config",
+	} {
+		if err := db.dropSQLiteColumnIfExists(ctx, "system_settings", column); err != nil {
+			return err
+		}
+	}
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS prompt_filter_logs;`,
+		`DROP TABLE IF EXISTS image_assets;`,
+		`DROP TABLE IF EXISTS image_generation_jobs;`,
+		`DROP TABLE IF EXISTS image_prompt_templates;`,
+	} {
+		if _, err := db.conn.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
 
 	indexStatements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_accounts_status ON accounts(status);`,
@@ -442,14 +390,6 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_account_events_created ON account_events(created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_account_events_type_created ON account_events(event_type, created_at);`,
 		`CREATE INDEX IF NOT EXISTS idx_ip_bans_active ON ip_bans(enabled, unbanned_at, expires_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_updated ON image_prompt_templates(updated_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_favorite ON image_prompt_templates(favorite, updated_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_created ON image_generation_jobs(created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_status ON image_generation_jobs(status, created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_assets_created ON image_assets(created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_image_assets_job_id ON image_assets(job_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_created_at ON prompt_filter_logs(created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_action_created_at ON prompt_filter_logs(action, created_at);`,
 	}
 	for _, stmt := range indexStatements {
 		if _, err := db.conn.ExecContext(ctx, stmt); err != nil {

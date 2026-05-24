@@ -461,10 +461,6 @@ export default function Settings() {
     { label: t("settings.streamFlushImmediate"), value: "immediate" },
     { label: t("settings.streamFlushCoalesce"), value: "coalesce" },
   ];
-  const imageStorageBackendOptions = [
-    { label: t("settings.imageStorageLocal"), value: "local" },
-    { label: t("settings.imageStorageS3"), value: "s3" },
-  ];
   const normalizeLazySettingsForm = useCallback(
     (settings: SystemSettings): SystemSettings => {
       if (!settings.lazy_mode) {
@@ -518,15 +514,6 @@ export default function Settings() {
     model_mapping: "{}",
     resin_url: "",
     resin_platform_name: "",
-    prompt_filter_enabled: false,
-    prompt_filter_mode: "monitor",
-    prompt_filter_threshold: 50,
-    prompt_filter_strict_threshold: 90,
-    prompt_filter_log_matches: true,
-    prompt_filter_max_text_length: 81920,
-    prompt_filter_sensitive_words: "",
-    prompt_filter_custom_patterns: "[]",
-    prompt_filter_disabled_patterns: "[]",
     client_compat_mode: "preserve",
     codex_min_cli_version: "0.118.0",
     usage_log_mode: "full",
@@ -542,18 +529,9 @@ export default function Settings() {
     api_maintenance_sse_randomize: false,
     api_maintenance_image_b64_json: "",
     api_maintenance_routes_json: "{}",
-    image_storage_backend: "local",
-    image_s3_endpoint: "",
-    image_s3_region: "",
-    image_s3_bucket: "",
-    image_s3_access_key: "",
-    image_s3_secret_key: "",
-    image_s3_prefix: "",
-    image_s3_force_path_style: false,
   });
   const lazyModeActive = settingsForm.lazy_mode;
   const [savingSettings, setSavingSettings] = useState(false);
-  const [testingImageStorage, setTestingImageStorage] = useState(false);
   const [loadedAdminSecret, setLoadedAdminSecret] = useState("");
   const [modelList, setModelList] = useState<string[]>([]);
   const [modelItems, setModelItems] = useState<ModelInfo[]>([]);
@@ -665,29 +643,6 @@ export default function Settings() {
       }
     } catch {
       showToast(t("settings.siteLogoCompressionFailed"), "error");
-    }
-  };
-
-  const handleTestImageStorage = async () => {
-    setTestingImageStorage(true);
-    try {
-      const result = await api.testImageStorageConnection({
-        endpoint: settingsForm.image_s3_endpoint,
-        region: settingsForm.image_s3_region,
-        bucket: settingsForm.image_s3_bucket,
-        access_key: settingsForm.image_s3_access_key,
-        secret_key: settingsForm.image_s3_secret_key,
-        prefix: settingsForm.image_s3_prefix,
-        force_path_style: settingsForm.image_s3_force_path_style,
-      });
-      showToast(t("settings.imageS3TestSuccess", { bucket: result.bucket }));
-    } catch (error) {
-      showToast(
-        `${t("settings.imageS3TestFailed")}: ${getErrorMessage(error)}`,
-        "error",
-      );
-    } finally {
-      setTestingImageStorage(false);
     }
   };
 
@@ -1193,162 +1148,6 @@ export default function Settings() {
             </div>
           </SettingsCard>
 
-          <SettingsCard
-            title={t("settings.imageStorage")}
-            description={t("settings.imageStorageDesc")}
-          >
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
-              <SettingField
-                label={t("settings.imageStorageBackend")}
-                description={t("settings.imageStorageBackendDesc")}
-              >
-                <Select
-                  value={settingsForm.image_storage_backend}
-                  onValueChange={(value) =>
-                    setSettingsForm((f) => ({
-                      ...f,
-                      image_storage_backend: value,
-                    }))
-                  }
-                  options={imageStorageBackendOptions}
-                />
-              </SettingField>
-              {settingsForm.image_storage_backend === "s3" ? (
-                <>
-                  <SettingField
-                    label={t("settings.imageS3Endpoint")}
-                    description={t("settings.imageS3EndpointDesc")}
-                  >
-                    <Input
-                      value={settingsForm.image_s3_endpoint}
-                      placeholder="https://..."
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_endpoint: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3Region")}
-                    description={t("settings.imageS3RegionDesc")}
-                  >
-                    <Input
-                      value={settingsForm.image_s3_region}
-                      placeholder="auto"
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_region: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3Bucket")}
-                    description={t("settings.imageS3BucketDesc")}
-                  >
-                    <Input
-                      value={settingsForm.image_s3_bucket}
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_bucket: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3AccessKey")}
-                    description={t("settings.imageS3AccessKeyDesc")}
-                  >
-                    <Input
-                      value={settingsForm.image_s3_access_key}
-                      autoComplete="off"
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_access_key: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3SecretKey")}
-                    description={t("settings.imageS3SecretKeyDesc")}
-                  >
-                    <Input
-                      type="password"
-                      value={settingsForm.image_s3_secret_key}
-                      autoComplete="new-password"
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_secret_key: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3Prefix")}
-                    description={t("settings.imageS3PrefixDesc")}
-                  >
-                    <Input
-                      value={settingsForm.image_s3_prefix}
-                      placeholder="codex/images"
-                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_prefix: e.target.value,
-                        }))
-                      }
-                    />
-                  </SettingField>
-                  <SettingField
-                    label={t("settings.imageS3ForcePathStyle")}
-                    description={t("settings.imageS3ForcePathStyleDesc")}
-                  >
-                    <Select
-                      value={
-                        settingsForm.image_s3_force_path_style
-                          ? "true"
-                          : "false"
-                      }
-                      onValueChange={(value) =>
-                        setSettingsForm((f) => ({
-                          ...f,
-                          image_s3_force_path_style: value === "true",
-                        }))
-                      }
-                      options={booleanOptions}
-                    />
-                  </SettingField>
-                </>
-              ) : null}
-            </div>
-            {settingsForm.image_storage_backend === "s3" ? (
-              <div className="mt-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleTestImageStorage()}
-                  disabled={
-                    testingImageStorage ||
-                    !settingsForm.image_s3_bucket ||
-                    !settingsForm.image_s3_access_key ||
-                    !settingsForm.image_s3_secret_key
-                  }
-                >
-                  {testingImageStorage
-                    ? t("settings.imageS3Testing")
-                    : t("settings.imageS3Test")}
-                </Button>
-              </div>
-            ) : null}
-          </SettingsCard>
-
           <SettingsCard title={t("settings.autoCleanup")}>
             <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
               <SettingField
@@ -1495,45 +1294,6 @@ export default function Settings() {
                       }))
                     }
                     options={booleanOptions}
-                  />
-                </SettingField>
-                <SettingField
-                  label={t("settings.promptFilterEnabled")}
-                  description={t("settings.promptFilterEnabledDesc")}
-                >
-                  <Select
-                    value={
-                      settingsForm.prompt_filter_enabled ? "true" : "false"
-                    }
-                    onValueChange={(value) =>
-                      setSettingsForm((f) => ({
-                        ...f,
-                        prompt_filter_enabled: value === "true",
-                      }))
-                    }
-                    options={booleanOptions}
-                  />
-                </SettingField>
-                <SettingField
-                  label={t("settings.promptFilterMode")}
-                  description={t("settings.promptFilterModeDesc")}
-                >
-                  <Select
-                    value={settingsForm.prompt_filter_mode}
-                    onValueChange={(value) =>
-                      setSettingsForm((f) => ({
-                        ...f,
-                        prompt_filter_mode: value,
-                      }))
-                    }
-                    options={[
-                      {
-                        label: t("promptFilter.modeMonitor"),
-                        value: "monitor",
-                      },
-                      { label: t("promptFilter.modeWarn"), value: "warn" },
-                      { label: t("promptFilter.modeBlock"), value: "block" },
-                    ]}
                   />
                 </SettingField>
               </div>

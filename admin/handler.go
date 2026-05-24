@@ -28,10 +28,8 @@ import (
 	"github.com/codex2api/auth"
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
-	"github.com/codex2api/internal/imagestore"
 	"github.com/codex2api/proxy"
 	"github.com/codex2api/security"
-	"github.com/codex2api/security/promptfilter"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -52,7 +50,6 @@ type Handler struct {
 	cacheDriver    string
 	cacheLabel     string
 	adminSecretEnv string
-	imageProxy     *proxy.Handler
 
 	// 图表聚合内存缓存（10秒 TTL）
 	chartCacheMu   sync.RWMutex
@@ -171,18 +168,9 @@ func NewHandler(store *auth.Store, db *database.DB, tc cache.TokenCache, rl *pro
 		cacheDriver:    tc.Driver(),
 		cacheLabel:     tc.Label(),
 		adminSecretEnv: adminSecretEnv,
-		imageProxy:     proxy.NewHandler(store, db, nil, nil),
 		chartCacheData: make(map[string]*chartCacheEntry),
 	}
-	if handler.imageProxy != nil {
-		handler.imageProxy.SetRuntimeCache(tc)
-	}
 	handler.refreshAccount = handler.refreshSingleAccount
-	if db != nil {
-		if err := db.MarkInterruptedImageJobs(context.Background()); err != nil {
-			log.Printf("标记中断生图任务失败: %v", err)
-		}
-	}
 	return handler
 }
 
@@ -194,7 +182,6 @@ func (h *Handler) SetPoolSizes(pgMaxConns, redisPoolSize int) {
 
 // RegisterRoutes 注册管理 API 路由
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	r.GET("/p/img/:id", h.GetSignedImageAssetFile)
 	r.GET("/api/branding", h.GetBranding)
 	r.GET("/api/public/home", h.GetPublicHome)
 	r.GET("/api/public/chart-data", h.GetPublicChartData)
@@ -252,6 +239,7 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.DELETE("/account-groups/:id", h.DeleteAccountGroup)
 	api.GET("/health", h.GetHealth)
 	api.GET("/ops/overview", h.GetOpsOverview)
+	api.GET("/ip-stats", h.GetIPUsageStats)
 	api.GET("/ops/errors", h.GetOpsErrorLogs)
 	api.GET("/ops/errors/export", h.ExportOpsErrorLogs)
 	api.GET("/ops/errors/summary", h.GetOpsErrorSummary)
@@ -262,25 +250,8 @@ func (h *Handler) RegisterRoutes(r *gin.Engine) {
 	api.POST("/ip-bans/batch", h.CreateIPBansBatch)
 	api.POST("/ip-bans/:id/unban", h.UnbanIPBan)
 	api.DELETE("/ip-bans/:id", h.DeleteIPBan)
-	api.POST("/settings/image-storage/test", h.TestImageStorageConnection)
-	api.GET("/prompt-filter/logs", h.ListPromptFilterLogs)
-	api.DELETE("/prompt-filter/logs", h.ClearPromptFilterLogs)
-	api.POST("/prompt-filter/test", h.TestPromptFilter)
-	api.GET("/prompt-filter/rules", h.GetPromptFilterRules)
 	api.GET("/models", h.ListModels)
 	api.POST("/models/sync", h.SyncModels)
-	api.GET("/image-prompts", h.ListImagePromptTemplates)
-	api.POST("/image-prompts", h.CreateImagePromptTemplate)
-	api.PATCH("/image-prompts/:id", h.UpdateImagePromptTemplate)
-	api.DELETE("/image-prompts/:id", h.DeleteImagePromptTemplate)
-	api.POST("/images/jobs", h.CreateImageGenerationJob)
-	api.POST("/images/edit-jobs", h.CreateImageEditJob)
-	api.GET("/images/jobs", h.ListImageGenerationJobs)
-	api.GET("/images/jobs/:id", h.GetImageGenerationJob)
-	api.DELETE("/images/jobs/:id", h.DeleteImageGenerationJob)
-	api.GET("/images/assets", h.ListImageAssets)
-	api.GET("/images/assets/:id/file", h.GetImageAssetFile)
-	api.DELETE("/images/assets/:id", h.DeleteImageAsset)
 	api.GET("/proxies", h.ListProxies)
 	api.POST("/proxies", h.AddProxies)
 	api.DELETE("/proxies/:id", h.DeleteProxy)
@@ -3982,15 +3953,6 @@ type settingsResponse struct {
 	ModelMapping                     string  `json:"model_mapping"`
 	ResinURL                         string  `json:"resin_url"`
 	ResinPlatformName                string  `json:"resin_platform_name"`
-	PromptFilterEnabled              bool    `json:"prompt_filter_enabled"`
-	PromptFilterMode                 string  `json:"prompt_filter_mode"`
-	PromptFilterThreshold            int     `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold      int     `json:"prompt_filter_strict_threshold"`
-	PromptFilterLogMatches           bool    `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength        int     `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords       string  `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns       string  `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns     string  `json:"prompt_filter_disabled_patterns"`
 	ClientCompatMode                 string  `json:"client_compat_mode"`
 	CodexMinCLIVersion               string  `json:"codex_min_cli_version"`
 	UsageLogMode                     string  `json:"usage_log_mode"`
@@ -4006,14 +3968,6 @@ type settingsResponse struct {
 	APIMaintenanceSSERandomize       bool    `json:"api_maintenance_sse_randomize"`
 	APIMaintenanceImageB64JSON       string  `json:"api_maintenance_image_b64_json"`
 	APIMaintenanceRoutesJSON         string  `json:"api_maintenance_routes_json"`
-	ImageStorageBackend              string  `json:"image_storage_backend"`
-	ImageS3Endpoint                  string  `json:"image_s3_endpoint"`
-	ImageS3Region                    string  `json:"image_s3_region"`
-	ImageS3Bucket                    string  `json:"image_s3_bucket"`
-	ImageS3AccessKey                 string  `json:"image_s3_access_key"`
-	ImageS3SecretKey                 string  `json:"image_s3_secret_key"`
-	ImageS3Prefix                    string  `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle            bool    `json:"image_s3_force_path_style"`
 }
 
 type updateSettingsReq struct {
@@ -4054,15 +4008,6 @@ type updateSettingsReq struct {
 	ModelMapping                     *string  `json:"model_mapping"`
 	ResinURL                         *string  `json:"resin_url"`
 	ResinPlatformName                *string  `json:"resin_platform_name"`
-	PromptFilterEnabled              *bool    `json:"prompt_filter_enabled"`
-	PromptFilterMode                 *string  `json:"prompt_filter_mode"`
-	PromptFilterThreshold            *int     `json:"prompt_filter_threshold"`
-	PromptFilterStrictThreshold      *int     `json:"prompt_filter_strict_threshold"`
-	PromptFilterLogMatches           *bool    `json:"prompt_filter_log_matches"`
-	PromptFilterMaxTextLength        *int     `json:"prompt_filter_max_text_length"`
-	PromptFilterSensitiveWords       *string  `json:"prompt_filter_sensitive_words"`
-	PromptFilterCustomPatterns       *string  `json:"prompt_filter_custom_patterns"`
-	PromptFilterDisabledPatterns     *string  `json:"prompt_filter_disabled_patterns"`
 	ClientCompatMode                 *string  `json:"client_compat_mode"`
 	CodexMinCLIVersion               *string  `json:"codex_min_cli_version"`
 	UsageLogMode                     *string  `json:"usage_log_mode"`
@@ -4078,14 +4023,6 @@ type updateSettingsReq struct {
 	APIMaintenanceSSERandomize       *bool    `json:"api_maintenance_sse_randomize"`
 	APIMaintenanceImageB64JSON       *string  `json:"api_maintenance_image_b64_json"`
 	APIMaintenanceRoutesJSON         *string  `json:"api_maintenance_routes_json"`
-	ImageStorageBackend              *string  `json:"image_storage_backend"`
-	ImageS3Endpoint                  *string  `json:"image_s3_endpoint"`
-	ImageS3Region                    *string  `json:"image_s3_region"`
-	ImageS3Bucket                    *string  `json:"image_s3_bucket"`
-	ImageS3AccessKey                 *string  `json:"image_s3_access_key"`
-	ImageS3SecretKey                 *string  `json:"image_s3_secret_key"`
-	ImageS3Prefix                    *string  `json:"image_s3_prefix"`
-	ImageS3ForcePathStyle            *bool    `json:"image_s3_force_path_style"`
 }
 
 type brandingResponse struct {
@@ -4455,14 +4392,11 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		resinURL = dbSettings.ResinURL
 		resinPlatformName = dbSettings.ResinPlatformName
 	}
-	promptFilterCfg := h.store.GetPromptFilterConfig()
 	runtimeCfg := proxy.CurrentRuntimeSettings()
 	maintenanceRoutesJSON := "{}"
 	if raw, err := json.Marshal(runtimeCfg.APIMaintenance.Routes); err == nil {
 		maintenanceRoutesJSON = string(raw)
 	}
-	imgCfg := imagestore.CurrentConfig()
-	imgPrefix := strings.TrimSuffix(imgCfg.Prefix, "/")
 	c.JSON(http.StatusOK, settingsResponse{
 		SiteName:                         branding.SiteName,
 		SiteLogo:                         branding.SiteLogo,
@@ -4505,15 +4439,6 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		ModelMapping:                     h.store.GetModelMapping(),
 		ResinURL:                         resinURL,
 		ResinPlatformName:                resinPlatformName,
-		PromptFilterEnabled:              promptFilterCfg.Enabled,
-		PromptFilterMode:                 promptFilterCfg.Mode,
-		PromptFilterThreshold:            promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:      promptFilterCfg.StrictThreshold,
-		PromptFilterLogMatches:           promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:        promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:       promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:       promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:     promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
 		ClientCompatMode:                 runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:               runtimeCfg.CodexMinCLIVersion,
 		UsageLogMode:                     h.db.GetUsageLogMode(),
@@ -4529,14 +4454,6 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
 		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,
 		APIMaintenanceRoutesJSON:         maintenanceRoutesJSON,
-		ImageStorageBackend:              imgCfg.Backend,
-		ImageS3Endpoint:                  imgCfg.Endpoint,
-		ImageS3Region:                    imgCfg.Region,
-		ImageS3Bucket:                    imgCfg.Bucket,
-		ImageS3AccessKey:                 imgCfg.AccessKey,
-		ImageS3SecretKey:                 imgCfg.SecretKey,
-		ImageS3Prefix:                    imgPrefix,
-		ImageS3ForcePathStyle:            imgCfg.ForcePathStyle,
 	})
 }
 
@@ -4938,64 +4855,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		usageLogFlushIntervalSeconds = h.db.GetUsageLogFlushIntervalSeconds()
 	}
 
-	promptFilterCfg := h.store.GetPromptFilterConfig()
-	promptFilterChanged := false
-	if req.PromptFilterEnabled != nil {
-		promptFilterCfg.Enabled = *req.PromptFilterEnabled
-		promptFilterChanged = true
-	}
-	if req.PromptFilterMode != nil {
-		promptFilterCfg.Mode = *req.PromptFilterMode
-		promptFilterChanged = true
-	}
-	if req.PromptFilterThreshold != nil {
-		promptFilterCfg.Threshold = *req.PromptFilterThreshold
-		promptFilterChanged = true
-	}
-	if req.PromptFilterStrictThreshold != nil {
-		promptFilterCfg.StrictThreshold = *req.PromptFilterStrictThreshold
-		promptFilterChanged = true
-	}
-	if req.PromptFilterLogMatches != nil {
-		promptFilterCfg.LogMatches = *req.PromptFilterLogMatches
-		promptFilterChanged = true
-	}
-	if req.PromptFilterMaxTextLength != nil {
-		promptFilterCfg.MaxTextLength = *req.PromptFilterMaxTextLength
-		promptFilterChanged = true
-	}
-	if req.PromptFilterSensitiveWords != nil {
-		promptFilterCfg.SensitiveWords = *req.PromptFilterSensitiveWords
-		promptFilterChanged = true
-	}
-	if req.PromptFilterCustomPatterns != nil {
-		patterns, err := promptfilter.ParseCustomPatterns(*req.PromptFilterCustomPatterns)
-		if err != nil {
-			writeError(c, http.StatusBadRequest, "Prompt 检查自定义规则 JSON 无效: "+err.Error())
-			return
-		}
-		promptFilterCfg.CustomPatterns = patterns
-		promptFilterChanged = true
-	}
-	if req.PromptFilterDisabledPatterns != nil {
-		disabled, err := promptfilter.ParseDisabledPatterns(*req.PromptFilterDisabledPatterns)
-		if err != nil {
-			writeError(c, http.StatusBadRequest, "Prompt 检查禁用规则 JSON 无效: "+err.Error())
-			return
-		}
-		promptFilterCfg.DisabledPatterns = disabled
-		promptFilterChanged = true
-	}
-	if promptFilterChanged {
-		promptFilterCfg = promptfilter.NormalizeConfig(promptFilterCfg)
-		if _, err := promptfilter.NewEngine(promptFilterCfg); err != nil {
-			writeError(c, http.StatusBadRequest, "Prompt 检查规则无效: "+err.Error())
-			return
-		}
-		h.store.SetPromptFilterConfig(promptFilterCfg)
-		log.Printf("设置已更新: prompt_filter enabled=%t mode=%s threshold=%d", promptFilterCfg.Enabled, promptFilterCfg.Mode, promptFilterCfg.Threshold)
-	}
-
 	// Resin 粘性代理池配置
 	resinURL := ""
 	resinPlatformName := ""
@@ -5023,57 +4882,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		} else {
 			auth.ResinRequestDecorator = nil
 		}
-	}
-
-	// 图片存储后端配置
-	imgCfg := imagestore.CurrentConfig()
-	imgChanged := false
-	if req.ImageStorageBackend != nil {
-		imgCfg.Backend = *req.ImageStorageBackend
-		imgChanged = true
-	}
-	if req.ImageS3Endpoint != nil {
-		imgCfg.Endpoint = *req.ImageS3Endpoint
-		imgChanged = true
-	}
-	if req.ImageS3Region != nil {
-		imgCfg.Region = *req.ImageS3Region
-		imgChanged = true
-	}
-	if req.ImageS3Bucket != nil {
-		imgCfg.Bucket = *req.ImageS3Bucket
-		imgChanged = true
-	}
-	if req.ImageS3AccessKey != nil {
-		imgCfg.AccessKey = *req.ImageS3AccessKey
-		imgChanged = true
-	}
-	if req.ImageS3SecretKey != nil {
-		imgCfg.SecretKey = *req.ImageS3SecretKey
-		imgChanged = true
-	}
-	if req.ImageS3Prefix != nil {
-		imgCfg.Prefix = *req.ImageS3Prefix
-		imgChanged = true
-	}
-	if req.ImageS3ForcePathStyle != nil {
-		imgCfg.ForcePathStyle = *req.ImageS3ForcePathStyle
-		imgChanged = true
-	}
-	imgCfg.LocalDir = imageAssetDir()
-	if imgChanged {
-		if err := imagestore.Configure(imgCfg); err != nil {
-			writeError(c, http.StatusBadRequest, "图片存储配置无效: "+err.Error())
-			return
-		}
-		// Configure 内部 Normalize 过，重新读出来用于持久化
-		imgCfg = imagestore.CurrentConfig()
-		log.Printf("设置已更新: image_storage_backend = %s", imgCfg.Backend)
-	}
-	imgConfigJSON, encodeErr := imagestore.EncodeConfigJSON(imgCfg)
-	if encodeErr != nil {
-		log.Printf("图片存储配置序列化失败: %v", encodeErr)
-		imgConfigJSON = "{}"
 	}
 
 	// 持久化保存到数据库
@@ -5114,15 +4922,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ModelMapping:                     h.store.GetModelMapping(),
 		ResinURL:                         resinURL,
 		ResinPlatformName:                resinPlatformName,
-		PromptFilterEnabled:              promptFilterCfg.Enabled,
-		PromptFilterMode:                 promptFilterCfg.Mode,
-		PromptFilterThreshold:            promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:      promptFilterCfg.StrictThreshold,
-		PromptFilterLogMatches:           promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:        promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:       promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:       promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:     promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
 		ClientCompatMode:                 runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:               runtimeCfg.CodexMinCLIVersion,
 		UsageLogMode:                     usageLogMode,
@@ -5130,7 +4929,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		UsageLogFlushIntervalSeconds:     usageLogFlushIntervalSeconds,
 		StreamFlushPolicy:                runtimeCfg.StreamFlushPolicy,
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
-		ImageStorageConfig:               imgConfigJSON,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
@@ -5201,15 +4999,6 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ModelMapping:                     h.store.GetModelMapping(),
 		ResinURL:                         resinURL,
 		ResinPlatformName:                resinPlatformName,
-		PromptFilterEnabled:              promptFilterCfg.Enabled,
-		PromptFilterMode:                 promptFilterCfg.Mode,
-		PromptFilterThreshold:            promptFilterCfg.Threshold,
-		PromptFilterStrictThreshold:      promptFilterCfg.StrictThreshold,
-		PromptFilterLogMatches:           promptFilterCfg.LogMatches,
-		PromptFilterMaxTextLength:        promptFilterCfg.MaxTextLength,
-		PromptFilterSensitiveWords:       promptFilterCfg.SensitiveWords,
-		PromptFilterCustomPatterns:       promptfilter.MarshalCustomPatterns(promptFilterCfg.CustomPatterns),
-		PromptFilterDisabledPatterns:     promptfilter.MarshalDisabledPatterns(promptFilterCfg.DisabledPatterns),
 		ClientCompatMode:                 runtimeCfg.ClientCompatMode,
 		CodexMinCLIVersion:               runtimeCfg.CodexMinCLIVersion,
 		UsageLogMode:                     usageLogMode,
@@ -5225,61 +5014,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
 		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,
 		APIMaintenanceRoutesJSON:         maintenanceRoutesJSON,
-		ImageStorageBackend:              imgCfg.Backend,
-		ImageS3Endpoint:                  imgCfg.Endpoint,
-		ImageS3Region:                    imgCfg.Region,
-		ImageS3Bucket:                    imgCfg.Bucket,
-		ImageS3AccessKey:                 imgCfg.AccessKey,
-		ImageS3SecretKey:                 imgCfg.SecretKey,
-		ImageS3Prefix:                    strings.TrimSuffix(imgCfg.Prefix, "/"),
-		ImageS3ForcePathStyle:            imgCfg.ForcePathStyle,
 	})
-}
-
-type testImageStorageReq struct {
-	Endpoint       string `json:"endpoint"`
-	Region         string `json:"region"`
-	Bucket         string `json:"bucket"`
-	AccessKey      string `json:"access_key"`
-	SecretKey      string `json:"secret_key"`
-	Prefix         string `json:"prefix"`
-	ForcePathStyle bool   `json:"force_path_style"`
-}
-
-// TestImageStorageConnection 用提交的字段临时构造一次 S3Backend，调用 HeadBucket 验证可达性。
-// 不修改任何持久化状态，便于"保存前先点测试连接"。
-func (h *Handler) TestImageStorageConnection(c *gin.Context) {
-	var req testImageStorageReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		writeError(c, http.StatusBadRequest, "请求格式错误")
-		return
-	}
-	cfg := imagestore.Config{
-		Backend:        imagestore.BackendS3,
-		Endpoint:       req.Endpoint,
-		Region:         req.Region,
-		Bucket:         req.Bucket,
-		AccessKey:      req.AccessKey,
-		SecretKey:      req.SecretKey,
-		Prefix:         req.Prefix,
-		ForcePathStyle: req.ForcePathStyle,
-	}.Normalize()
-	if err := cfg.Validate(); err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	backend, err := imagestore.NewS3Backend(cfg)
-	if err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-	if err := backend.HeadBucket(ctx); err != nil {
-		writeError(c, http.StatusBadRequest, err.Error())
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "bucket": cfg.Bucket})
 }
 
 // ==================== 导出 & 迁移 ====================

@@ -19,7 +19,6 @@ import (
 
 	"github.com/codex2api/cache"
 	"github.com/codex2api/database"
-	"github.com/codex2api/security/promptfilter"
 )
 
 // AccountStatus 账号状态
@@ -1512,7 +1511,6 @@ type Store struct {
 	modelMapping         atomic.Value // 模型映射 JSON 字符串
 	schedulerMode        atomic.Value // string: "round_robin" or "remaining_quota"
 	affinityMode         atomic.Value // string: "bounded" / "off" / "strict"
-	promptFilterConfig   atomic.Value // promptfilter.Config
 	sessionMu            sync.RWMutex
 	sessionBindings      map[string]sessionAffinity
 }
@@ -1928,7 +1926,6 @@ func NewStore(db *database.DB, tc cache.TokenCache, settings *database.SystemSet
 	if settings.ModelMapping != "" {
 		s.modelMapping.Store(settings.ModelMapping)
 	}
-	s.SetPromptFilterConfig(promptFilterConfigFromSettings(settings))
 	// 环境变量优先，否则读数据库设置
 	fastEnabled := fastSchedulerEnabledFromEnv() || settings.FastSchedulerEnabled
 	s.fastSchedulerEnabled.Store(fastEnabled)
@@ -2895,9 +2892,9 @@ func (s *Store) NextForSession(key string, apiKeyID int64, exclude map[int64]boo
 // affinity_mode 决定粘性强度:
 //   - off:     永不读绑定,每次都走完整挑号策略
 //   - bounded (默认): 绑定有效但被以下任一条件解除
-//     • 累计请求超过 defaultMaxAffinityRequests (50)
-//     • 绑定时长超过 defaultMaxAffinityDuration (5min)
-//     • 绑定账号当前已不属于 healthy 桶 (warm/risky/banned)
+//   - 累计请求超过 defaultMaxAffinityRequests (50)
+//   - 绑定时长超过 defaultMaxAffinityDuration (5min)
+//   - 绑定账号当前已不属于 healthy 桶 (warm/risky/banned)
 //   - strict:  完全沿用旧行为,只在 TTL 过期或显式 Unbind 时换号
 //
 // 解除发生时绕过 binding 走完整挑号策略(NextExcludingWithFilter),后续 BindSessionAffinity
@@ -3333,38 +3330,6 @@ func (s *Store) SetAffinityMode(mode string) {
 		mode = AffinityModeBounded
 	}
 	s.affinityMode.Store(mode)
-}
-
-func promptFilterConfigFromSettings(settings *database.SystemSettings) promptfilter.Config {
-	cfg := promptfilter.DefaultConfig()
-	if settings == nil {
-		return cfg
-	}
-	cfg.Enabled = settings.PromptFilterEnabled
-	cfg.Mode = settings.PromptFilterMode
-	cfg.Threshold = settings.PromptFilterThreshold
-	cfg.StrictThreshold = settings.PromptFilterStrictThreshold
-	cfg.LogMatches = settings.PromptFilterLogMatches
-	cfg.MaxTextLength = settings.PromptFilterMaxTextLength
-	cfg.SensitiveWords = settings.PromptFilterSensitiveWords
-	if patterns, err := promptfilter.ParseCustomPatterns(settings.PromptFilterCustomPatterns); err == nil {
-		cfg.CustomPatterns = patterns
-	}
-	if disabled, err := promptfilter.ParseDisabledPatterns(settings.PromptFilterDisabledPatterns); err == nil {
-		cfg.DisabledPatterns = disabled
-	}
-	return promptfilter.NormalizeConfig(cfg)
-}
-
-func (s *Store) SetPromptFilterConfig(cfg promptfilter.Config) {
-	s.promptFilterConfig.Store(promptfilter.NormalizeConfig(cfg))
-}
-
-func (s *Store) GetPromptFilterConfig() promptfilter.Config {
-	if v, ok := s.promptFilterConfig.Load().(promptfilter.Config); ok {
-		return promptfilter.NormalizeConfig(v)
-	}
-	return promptfilter.DefaultConfig()
 }
 
 // AddAccount 热加载新账号到内存池（前端添加后即刻生效）

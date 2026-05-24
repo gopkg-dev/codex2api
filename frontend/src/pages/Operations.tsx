@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -18,24 +18,15 @@ import PageHeader from '../components/PageHeader'
 import OpsTabs from '../components/OpsTabs'
 import StateShell from '../components/StateShell'
 import { useDataLoader } from '../hooks/useDataLoader'
-import type { IPStatsWindow, IPUsageStat, OpsOverviewResponse } from '../types'
+import type { OpsOverviewResponse } from '../types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 
 type MetricTone = 'normal' | 'warning' | 'danger' | 'info'
 
-const IP_STATS_WINDOWS: Array<{ key: IPStatsWindow; label: string }> = [
-  { key: '1m', label: '1分钟' },
-  { key: '5m', label: '5分钟' },
-  { key: '15m', label: '15分钟' },
-  { key: '1h', label: '1小时' },
-  { key: 'today', label: '今日' },
-]
-
 export default function Operations() {
   const { t } = useTranslation()
-  const [ipStatsWindow, setIPStatsWindow] = useState<IPStatsWindow>('5m')
-  const loadOperationsData = useCallback(() => api.getOpsOverview({ ipWindow: ipStatsWindow }), [ipStatsWindow])
+  const loadOperationsData = useCallback(() => api.getOpsOverview(), [])
 
   const { data: overview, loading, error, reload, reloadSilently } = useDataLoader<OpsOverviewResponse | null>({
     initialData: null,
@@ -180,8 +171,6 @@ export default function Operations() {
                 </div>
               </CardContent>
             </Card>
-
-            <IPStatsCard stats={overview.ip_stats ?? []} windowKey={ipStatsWindow} onWindowChange={setIPStatsWindow} />
           </>
         ) : null}
       </>
@@ -256,130 +245,6 @@ function OpsMetricCard({
   )
 }
 
-function RankingIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="560 30 920 980"
-      className={className}
-      aria-hidden="true"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M1012.6577777 717.01333333c-82.13333333 0-159.25333333-32.74666667-217.28-92.26666666-58.02666667-59.52-90.02666667-138.66666667-90.02666667-222.82666667V34.34666667h617.38666667v364.69333333c0 84.90666667-32.21333333 164.8-90.77333333 224.85333333s-136.42666667 93.12-219.30666667 93.12zM780.0177777 110.93333333v290.98666667c0 131.52 104.32 238.50666667 232.64 238.50666667 129.81333333 0 235.41333333-108.26666667 235.41333333-241.38666667V110.93333333H780.0177777z"
-        fill="#ffcd00"
-      />
-      <path
-        d="M976.66844437 955.85066667l1.06453333-280.85333334 74.66666667 0.28373334-1.0656 280.85333333z"
-        fill="#ffcd00"
-      />
-      <path
-        d="M810.2321777 986.5728l0.91733333-106.66666667 408.85333334 3.5136-0.91733334 106.66666667zM929.4705777 325.44746667l133.96906667-136.8032 38.10666666 37.31733333-133.96906666 136.8032zM927.7009777 495.73866667l136.52693333-140.86293334 38.29866667 37.12-136.52693333 140.86293334zM1285.2977777 445.44v-49.28c51.52 0 86.72-26.13333333 107.84-79.68 16.32-41.6 17.06666667-83.41333333 17.06666667-85.12v-38.4h-117.33333334v-49.28H1455.64444437v87.89333333c0 2.13333333-0.53333333 52.8-20.69333334 104.10666667-12.26666667 31.25333333-29.33333333 56.42666667-50.66666666 74.77333333-26.98666667 23.14666667-60.26666667 34.98666667-98.98666667 34.98666667zM743.00444437 443.84v-51.09333333c-51.30666667 0-86.4-27.09333333-107.41333334-82.77333334-16.32-43.2-16.96-86.61333333-16.96-88.32v-39.89333333h116.69333334v-51.09333333h-162.13333334V221.86666667c0 2.24 0.53333333 54.82666667 20.58666667 108.05333333 12.26666667 32.53333333 29.22666667 58.56 50.56 77.65333333 26.88 24 60.05333333 36.26666667 98.66666667 36.26666667z"
-        fill="#ffcd00"
-      />
-    </svg>
-  )
-}
-
-function IPStatsCard({
-  stats,
-  windowKey,
-  onWindowChange,
-}: {
-  stats: IPUsageStat[]
-  windowKey: IPStatsWindow
-  onWindowChange: (window: IPStatsWindow) => void
-}) {
-  const { t } = useTranslation()
-
-  return (
-    <Card className="mt-4">
-      <CardContent className="p-6">
-        <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <RankingIcon className="size-5" />
-            </div>
-            <div className="min-w-0">
-              <h3 className="truncate text-base font-semibold text-foreground">{t('ops.ipStatsTitle')}</h3>
-              <p className="mt-1 truncate text-sm text-muted-foreground">{getIPStatsWindowLabel(windowKey)}实时状态</p>
-            </div>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2">
-            {IP_STATS_WINDOWS.map((option) => (
-              <Button
-                key={option.key}
-                type="button"
-                size="sm"
-                variant={windowKey === option.key ? 'default' : 'outline'}
-                className="h-8 px-3 text-xs"
-                onClick={() => onWindowChange(option.key)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        </div>
-
-        {stats.length > 0 ? (
-          <div className="overflow-x-auto rounded-lg border border-border">
-            <div className="min-w-[680px] sm:min-w-full">
-              <div className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] bg-muted/60 px-3 py-2 text-xs font-semibold text-muted-foreground">
-                <div>IP</div>
-                <div>状态</div>
-                <div className="text-right">{t('ops.ipStatsRequests')}</div>
-                <div className="text-right">RPM</div>
-                <div className="text-right">TPM</div>
-                <div className="text-right">Token</div>
-                <div className="text-right">{t('ops.cost')}</div>
-              </div>
-              <div className="divide-y divide-border">
-                {stats.map((item) => (
-                  <div key={item.ip} className="grid grid-cols-[minmax(140px,1.4fr)_minmax(72px,.7fr)_minmax(72px,.7fr)_minmax(64px,.55fr)_minmax(72px,.6fr)_minmax(80px,.7fr)_minmax(96px,.85fr)] items-center px-3 py-2 text-sm">
-                    <div className="truncate font-medium text-foreground" title={item.ip}>{item.ip}</div>
-                    <div><IPStatusBadge status={item.status} /></div>
-                    <div className="text-right tabular-nums text-foreground">{formatNumber(item.requests)}</div>
-                    <div className="text-right tabular-nums text-foreground">{formatNumber(Math.round(item.rpm))}</div>
-                    <div className="text-right tabular-nums text-foreground">{formatCompactNumber(Math.round(item.tpm))}</div>
-                    <div className="text-right tabular-nums text-foreground">{formatCompactNumber(item.tokens)}</div>
-                    <div className="text-right tabular-nums text-foreground">{formatMoneyFixed4(item.cost)}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex min-h-[96px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
-            {t('ops.ipStatsEmpty')}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  )
-}
-
-function IPStatusBadge({ status }: { status?: string }) {
-  const config = getIPStatusConfig(status)
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${config.className}`}>
-      <span className="size-1.5 rounded-full bg-current" />
-      {config.label}
-    </span>
-  )
-}
-
-function getIPStatusConfig(status?: string): { label: string; className: string } {
-  switch (status) {
-    case 'banned':
-      return { label: '已封禁', className: 'bg-red-500/10 text-red-600 dark:text-red-300' }
-    case 'abnormal':
-      return { label: '异常', className: 'bg-orange-500/10 text-orange-600 dark:text-orange-300' }
-    case 'watch':
-      return { label: '关注', className: 'bg-amber-500/10 text-amber-600 dark:text-amber-300' }
-    default:
-      return { label: '正常', className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' }
-  }
-}
-
 function SummaryPill({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-card/85 px-3 py-2.5 shadow-sm">
@@ -421,46 +286,6 @@ function formatBytes(bytes: number): string {
 
 function formatNumber(value: number): string {
   return value.toLocaleString()
-}
-
-function getIPStatsWindowLabel(windowKey: IPStatsWindow): string {
-  switch (windowKey) {
-    case '1m':
-      return '最近 1 分钟'
-    case '15m':
-      return '最近 15 分钟'
-    case '1h':
-      return '最近 1 小时'
-    case 'today':
-      return '今日'
-    default:
-      return '最近 5 分钟'
-  }
-}
-
-function formatCompactNumber(value: number): string {
-  if (!Number.isFinite(value)) return '0'
-  const abs = Math.abs(value)
-  const sign = value < 0 ? '-' : ''
-  if (abs >= 1_000_000_000) {
-    return `${sign}${trimFixed(abs / 1_000_000_000, 1)}B`
-  }
-  if (abs >= 1_000_000) {
-    return `${sign}${trimFixed(abs / 1_000_000, 1)}M`
-  }
-  if (abs >= 1_000) {
-    return `${sign}${trimFixed(abs / 1_000, 1)}K`
-  }
-  return `${value}`
-}
-
-function trimFixed(value: number, digits: number): string {
-  return value.toFixed(digits).replace(/\.0$/, '')
-}
-
-function formatMoneyFixed4(value: number): string {
-  if (!Number.isFinite(value)) return '$0.0000'
-  return `$${value.toFixed(4)}`
 }
 
 function formatTimeLabel(iso: string): string {

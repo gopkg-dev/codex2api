@@ -19,8 +19,6 @@ const IPBlacklist = lazy(() => import("./pages/IPBlacklist"));
 const Docs = lazy(() => import("./pages/Docs"));
 const APIKeys = lazy(() => import("./pages/APIKeys"));
 const Usage = lazy(() => import("./pages/Usage"));
-const ImageStudio = lazy(() => import("./pages/ImageStudio"));
-const PromptFilter = lazy(() => import("./pages/PromptFilter"));
 const PublicModelChecker = lazy(() => import("./pages/PublicModelChecker"));
 
 export default function App() {
@@ -70,16 +68,6 @@ export default function App() {
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="/api-keys" element={<APIKeys />} />
                 <Route path="/proxies" element={<Proxies />} />
-                <Route
-                  path="/images"
-                  element={<Navigate to="/images/studio" replace />}
-                />
-                <Route path="/images/:view" element={<ImageStudio />} />
-                <Route
-                  path="/prompt-filter"
-                  element={<Navigate to="/prompt-filter/overview" replace />}
-                />
-                <Route path="/prompt-filter/:view" element={<PromptFilter />} />
                 <Route
                   path="/ops"
                   element={<Navigate to="/ops/overview" replace />}

@@ -662,15 +662,6 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS affinity_mode VARCHAR(16) DEFAULT 'bounded';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS resin_url TEXT DEFAULT '';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS resin_platform_name TEXT DEFAULT '';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_enabled BOOLEAN DEFAULT FALSE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_mode VARCHAR(20) DEFAULT 'monitor';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_threshold INT DEFAULT 50;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_strict_threshold INT DEFAULT 90;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_log_matches BOOLEAN DEFAULT TRUE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_max_text_length INT DEFAULT 81920;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_sensitive_words TEXT DEFAULT '';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_custom_patterns TEXT DEFAULT '[]';
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS prompt_filter_disabled_patterns TEXT DEFAULT '[]';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS client_compat_mode VARCHAR(20) DEFAULT 'preserve';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS codex_min_cli_version VARCHAR(32) DEFAULT '0.118.0';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_log_mode VARCHAR(20) DEFAULT 'full';
@@ -678,13 +669,22 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS usage_log_flush_interval_seconds INT DEFAULT 5;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_policy VARCHAR(20) DEFAULT 'immediate';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_interval_ms INT DEFAULT 20;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS image_storage_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS filter_local_fallback_response BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS disable_fast_service_tier BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS downstream_usage_multiplier DOUBLE PRECISION DEFAULT 1;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS protocol_message_usage_blast_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings DROP COLUMN IF EXISTS downstream_usage_multiplier_enabled;
 	ALTER TABLE system_settings DROP COLUMN IF EXISTS api_key_disabled_message;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_enabled;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_mode;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_threshold;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_strict_threshold;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_log_matches;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_max_text_length;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_sensitive_words;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_custom_patterns;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS prompt_filter_disabled_patterns;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS image_storage_config;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_maintenance_config TEXT DEFAULT '{}';
 	UPDATE system_settings
 	SET ip_qps_limit = COALESCE(NULLIF(ip_qps_limit, 0), ip_concurrency_limit, 0)
@@ -704,26 +704,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_ip_bans_active ON ip_bans(enabled, unbanned_at, expires_at);
 
-			CREATE TABLE IF NOT EXISTS prompt_filter_logs (
-				id               SERIAL PRIMARY KEY,
-				created_at       TIMESTAMPTZ DEFAULT NOW(),
-				source           VARCHAR(50) DEFAULT '',
-				endpoint         VARCHAR(100) DEFAULT '',
-				model            VARCHAR(100) DEFAULT '',
-				action           VARCHAR(20) DEFAULT '',
-				mode             VARCHAR(20) DEFAULT '',
-				score            INT DEFAULT 0,
-				threshold_value  INT DEFAULT 0,
-				matched_patterns TEXT DEFAULT '[]',
-				text_preview     TEXT DEFAULT '',
-				api_key_id       INT DEFAULT 0,
-				api_key_name     VARCHAR(255) DEFAULT '',
-				api_key_masked   VARCHAR(64) DEFAULT '',
-				client_ip        VARCHAR(64) DEFAULT '',
-				error_code       VARCHAR(100) DEFAULT ''
-			);
-			CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_created_at ON prompt_filter_logs(created_at);
-			CREATE INDEX IF NOT EXISTS idx_prompt_filter_logs_action_created_at ON prompt_filter_logs(action, created_at);
+			DROP TABLE IF EXISTS prompt_filter_logs;
 
 			CREATE TABLE IF NOT EXISTS model_registry (
 				id                     VARCHAR(100) PRIMARY KEY,
@@ -763,63 +744,9 @@ func (db *DB) migrate(ctx context.Context) error {
 	CREATE INDEX IF NOT EXISTS idx_account_events_created ON account_events(created_at);
 	CREATE INDEX IF NOT EXISTS idx_account_events_type_created ON account_events(event_type, created_at);
 
-	CREATE TABLE IF NOT EXISTS image_prompt_templates (
-		id            SERIAL PRIMARY KEY,
-		name          VARCHAR(255) NOT NULL DEFAULT '',
-		prompt        TEXT NOT NULL DEFAULT '',
-		model         VARCHAR(100) DEFAULT '',
-		size          VARCHAR(32) DEFAULT '',
-		quality       VARCHAR(32) DEFAULT '',
-		output_format VARCHAR(32) DEFAULT '',
-		background    VARCHAR(32) DEFAULT '',
-		style         VARCHAR(64) DEFAULT '',
-		tags          TEXT NOT NULL DEFAULT '[]',
-		favorite      BOOLEAN DEFAULT FALSE,
-		usage_count   INT DEFAULT 0,
-		last_used_at  TIMESTAMPTZ NULL,
-		created_at    TIMESTAMPTZ DEFAULT NOW(),
-		updated_at    TIMESTAMPTZ DEFAULT NOW()
-	);
-	CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_updated ON image_prompt_templates(updated_at);
-	CREATE INDEX IF NOT EXISTS idx_image_prompt_templates_favorite ON image_prompt_templates(favorite, updated_at);
-
-	CREATE TABLE IF NOT EXISTS image_generation_jobs (
-		id             SERIAL PRIMARY KEY,
-		status         VARCHAR(32) NOT NULL DEFAULT 'queued',
-		prompt         TEXT NOT NULL DEFAULT '',
-		params_json    TEXT NOT NULL DEFAULT '{}',
-		api_key_id     INT DEFAULT 0,
-		api_key_name   VARCHAR(255) DEFAULT '',
-		api_key_masked VARCHAR(64) DEFAULT '',
-		error_message  TEXT DEFAULT '',
-		duration_ms    INT DEFAULT 0,
-		created_at     TIMESTAMPTZ DEFAULT NOW(),
-		started_at     TIMESTAMPTZ NULL,
-		completed_at   TIMESTAMPTZ NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_created ON image_generation_jobs(created_at);
-	CREATE INDEX IF NOT EXISTS idx_image_generation_jobs_status ON image_generation_jobs(status, created_at);
-
-	CREATE TABLE IF NOT EXISTS image_assets (
-		id             SERIAL PRIMARY KEY,
-		job_id         INT NOT NULL DEFAULT 0,
-		template_id    INT DEFAULT 0,
-		filename       VARCHAR(255) NOT NULL DEFAULT '',
-		storage_path   TEXT NOT NULL DEFAULT '',
-		mime_type      VARCHAR(100) NOT NULL DEFAULT '',
-		bytes          INT DEFAULT 0,
-		width          INT DEFAULT 0,
-		height         INT DEFAULT 0,
-		model          VARCHAR(100) DEFAULT '',
-		requested_size VARCHAR(32) DEFAULT '',
-		actual_size    VARCHAR(32) DEFAULT '',
-		quality        VARCHAR(32) DEFAULT '',
-		output_format  VARCHAR(32) DEFAULT '',
-		revised_prompt TEXT DEFAULT '',
-		created_at     TIMESTAMPTZ DEFAULT NOW()
-	);
-	CREATE INDEX IF NOT EXISTS idx_image_assets_created ON image_assets(created_at);
-	CREATE INDEX IF NOT EXISTS idx_image_assets_job_id ON image_assets(job_id);
+	DROP TABLE IF EXISTS image_assets;
+	DROP TABLE IF EXISTS image_generation_jobs;
+	DROP TABLE IF EXISTS image_prompt_templates;
 	`
 	_, err := db.conn.ExecContext(ctx, query)
 	if err != nil {
@@ -1242,15 +1169,6 @@ type SystemSettings struct {
 	AffinityMode                     string // session 粘性模式: bounded / off / strict
 	ResinURL                         string // Resin 代理池地址（含 Token），例如 http://127.0.0.1:2260/my-token
 	ResinPlatformName                string // Resin 平台标识，例如 codex2api
-	PromptFilterEnabled              bool
-	PromptFilterMode                 string
-	PromptFilterThreshold            int
-	PromptFilterStrictThreshold      int
-	PromptFilterLogMatches           bool
-	PromptFilterMaxTextLength        int
-	PromptFilterSensitiveWords       string
-	PromptFilterCustomPatterns       string
-	PromptFilterDisabledPatterns     string
 	ClientCompatMode                 string
 	CodexMinCLIVersion               string
 	UsageLogMode                     string
@@ -1258,7 +1176,6 @@ type SystemSettings struct {
 	UsageLogFlushIntervalSeconds     int
 	StreamFlushPolicy                string
 	StreamFlushIntervalMS            int
-	ImageStorageConfig               string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
 	FilterLocalFallbackResponse      bool
 	DisableFastServiceTier           bool
 	DownstreamUsageMultiplier        float64
@@ -1292,15 +1209,6 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(affinity_mode, 'bounded'),
 		       COALESCE(resin_url, ''),
 		       COALESCE(resin_platform_name, ''),
-		       COALESCE(prompt_filter_enabled, false),
-		       COALESCE(prompt_filter_mode, 'monitor'),
-		       COALESCE(prompt_filter_threshold, 50),
-		       COALESCE(prompt_filter_strict_threshold, 90),
-		       COALESCE(prompt_filter_log_matches, true),
-		       COALESCE(prompt_filter_max_text_length, 81920),
-		       COALESCE(prompt_filter_sensitive_words, ''),
-		       COALESCE(prompt_filter_custom_patterns, '[]'),
-		       COALESCE(prompt_filter_disabled_patterns, '[]'),
 		       COALESCE(client_compat_mode, 'preserve'),
 		       COALESCE(codex_min_cli_version, '0.118.0'),
 		       COALESCE(usage_log_mode, 'full'),
@@ -1308,7 +1216,6 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(usage_log_flush_interval_seconds, 5),
 		       COALESCE(stream_flush_policy, 'immediate'),
 		       COALESCE(stream_flush_interval_ms, 20),
-		       COALESCE(image_storage_config, '{}'),
 		       COALESCE(filter_local_fallback_response, true),
 		       COALESCE(disable_fast_service_tier, false),
 		       COALESCE(downstream_usage_multiplier, 1),
@@ -1327,12 +1234,9 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.SchedulerMode,
 		&s.AffinityMode,
 		&s.ResinURL, &s.ResinPlatformName,
-		&s.PromptFilterEnabled, &s.PromptFilterMode, &s.PromptFilterThreshold, &s.PromptFilterStrictThreshold,
-		&s.PromptFilterLogMatches, &s.PromptFilterMaxTextLength, &s.PromptFilterSensitiveWords,
-		&s.PromptFilterCustomPatterns, &s.PromptFilterDisabledPatterns,
 		&s.ClientCompatMode, &s.CodexMinCLIVersion, &s.UsageLogMode, &s.UsageLogBatchSize,
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
-		&s.ImageStorageConfig, &s.FilterLocalFallbackResponse, &s.DisableFastServiceTier,
+		&s.FilterLocalFallbackResponse, &s.DisableFastServiceTier,
 		&s.DownstreamUsageMultiplier, &s.ProtocolMessageUsageBlastEnabled,
 		&s.APIMaintenanceConfig,
 	)
@@ -1356,16 +1260,14 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				fast_scheduler_enabled, max_retries, max_rate_limit_retries, allow_remote_migration, auto_clean_error, auto_clean_expired, lazy_mode, model_mapping,
 				background_refresh_interval_minutes, usage_probe_max_age_minutes, recovery_probe_interval_minutes,
 				usage_probe_concurrency,
-				resin_url, resin_platform_name, prompt_filter_enabled, prompt_filter_mode, prompt_filter_threshold,
-				prompt_filter_strict_threshold, prompt_filter_log_matches, prompt_filter_max_text_length,
-				prompt_filter_sensitive_words, prompt_filter_custom_patterns, prompt_filter_disabled_patterns,
+				resin_url, resin_platform_name,
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
-				image_storage_config, scheduler_mode, filter_local_fallback_response, disable_fast_service_tier,
+				scheduler_mode, filter_local_fallback_response, disable_fast_service_tier,
 				downstream_usage_multiplier, protocol_message_usage_blast_enabled, api_maintenance_config,
 				affinity_mode
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1401,15 +1303,6 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				recovery_probe_interval_minutes = EXCLUDED.recovery_probe_interval_minutes,
 				resin_url               = EXCLUDED.resin_url,
 				resin_platform_name     = EXCLUDED.resin_platform_name,
-				prompt_filter_enabled   = EXCLUDED.prompt_filter_enabled,
-				prompt_filter_mode      = EXCLUDED.prompt_filter_mode,
-				prompt_filter_threshold = EXCLUDED.prompt_filter_threshold,
-				prompt_filter_strict_threshold = EXCLUDED.prompt_filter_strict_threshold,
-				prompt_filter_log_matches = EXCLUDED.prompt_filter_log_matches,
-				prompt_filter_max_text_length = EXCLUDED.prompt_filter_max_text_length,
-				prompt_filter_sensitive_words = EXCLUDED.prompt_filter_sensitive_words,
-				prompt_filter_custom_patterns = EXCLUDED.prompt_filter_custom_patterns,
-				prompt_filter_disabled_patterns = EXCLUDED.prompt_filter_disabled_patterns,
 				client_compat_mode = EXCLUDED.client_compat_mode,
 				codex_min_cli_version = EXCLUDED.codex_min_cli_version,
 				usage_log_mode = EXCLUDED.usage_log_mode,
@@ -1417,7 +1310,6 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				usage_log_flush_interval_seconds = EXCLUDED.usage_log_flush_interval_seconds,
 				stream_flush_policy = EXCLUDED.stream_flush_policy,
 				stream_flush_interval_ms = EXCLUDED.stream_flush_interval_ms,
-				image_storage_config = EXCLUDED.image_storage_config,
 				scheduler_mode = EXCLUDED.scheduler_mode,
 				filter_local_fallback_response = EXCLUDED.filter_local_fallback_response,
 				disable_fast_service_tier = EXCLUDED.disable_fast_service_tier,
@@ -1431,12 +1323,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.FastSchedulerEnabled, s.MaxRetries, s.MaxRateLimitRetries, s.AllowRemoteMigration, s.AutoCleanError, s.AutoCleanExpired, s.LazyMode, s.ModelMapping,
 		s.BackgroundRefreshIntervalMinutes, s.UsageProbeMaxAgeMinutes, s.RecoveryProbeIntervalMinutes,
 		s.UsageProbeConcurrency,
-		s.ResinURL, s.ResinPlatformName, s.PromptFilterEnabled, s.PromptFilterMode, s.PromptFilterThreshold,
-		s.PromptFilterStrictThreshold, s.PromptFilterLogMatches, s.PromptFilterMaxTextLength,
-		s.PromptFilterSensitiveWords, s.PromptFilterCustomPatterns, s.PromptFilterDisabledPatterns,
+		s.ResinURL, s.ResinPlatformName,
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
-		s.ImageStorageConfig, s.SchedulerMode, s.FilterLocalFallbackResponse, s.DisableFastServiceTier,
+		s.SchedulerMode, s.FilterLocalFallbackResponse, s.DisableFastServiceTier,
 		s.DownstreamUsageMultiplier, s.ProtocolMessageUsageBlastEnabled, s.APIMaintenanceConfig,
 		normalizeAffinityMode(s.AffinityMode))
 	if err != nil {
@@ -2095,6 +1985,21 @@ type IPUsageStat struct {
 	Status   string  `json:"status"`
 }
 
+type IPUsageStatsQuery struct {
+	Page        int
+	PageSize    int
+	WindowStart time.Time
+	SortBy      string
+	SortOrder   string
+}
+
+type IPUsageStatsPage struct {
+	Stats    []IPUsageStat
+	Total    int64
+	Page     int
+	PageSize int
+}
+
 func (db *DB) GetIPUsageStats(ctx context.Context, limit int, windowStart time.Time) ([]IPUsageStat, error) {
 	if db == nil {
 		return []IPUsageStat{}, nil
@@ -2152,6 +2057,102 @@ func (db *DB) GetIPUsageStats(ctx context.Context, limit int, windowStart time.T
 		return nil, err
 	}
 	return stats, nil
+}
+
+func (db *DB) GetIPUsageStatsPage(ctx context.Context, query IPUsageStatsQuery) (*IPUsageStatsPage, error) {
+	if db == nil {
+		return &IPUsageStatsPage{Stats: []IPUsageStat{}, Page: 1, PageSize: 20}, nil
+	}
+	page := query.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := query.PageSize
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 20
+	}
+
+	now := time.Now()
+	windowStart := query.WindowStart
+	if windowStart.IsZero() {
+		windowStart = now.Add(-5 * time.Minute)
+	}
+	windowStartArg := db.timeArg(windowStart)
+	qpsStart := db.timeArg(now.Add(-10 * time.Second))
+	rpmStart := db.timeArg(now.Add(-1 * time.Minute))
+
+	var total int64
+	if err := db.conn.QueryRowContext(ctx, `
+		SELECT COUNT(DISTINCT TRIM(client_ip))
+		FROM usage_logs
+		WHERE NULLIF(TRIM(client_ip), '') IS NOT NULL
+		  AND created_at >= $1
+	`, windowStartArg).Scan(&total); err != nil {
+		return nil, err
+	}
+
+	sortColumn := ipUsageStatsSortColumn(query.SortBy)
+	sortOrder := "DESC"
+	if strings.EqualFold(query.SortOrder, "asc") {
+		sortOrder = "ASC"
+	}
+	offset := (page - 1) * pageSize
+	sql := fmt.Sprintf(`
+		SELECT
+			TRIM(client_ip) AS ip,
+			COUNT(*) AS requests,
+			COALESCE(SUM(total_tokens), 0) AS tokens,
+			COALESCE(SUM(user_billed), 0) AS cost,
+			COALESCE(SUM(CASE WHEN created_at >= $1 THEN 1 ELSE 0 END), 0) / 10.0 AS qps,
+			COALESCE(SUM(CASE WHEN created_at >= $2 THEN 1 ELSE 0 END), 0) AS rpm,
+			COALESCE(SUM(CASE WHEN created_at >= $2 THEN total_tokens ELSE 0 END), 0) AS tpm
+		FROM usage_logs
+		WHERE NULLIF(TRIM(client_ip), '') IS NOT NULL
+		  AND created_at >= $3
+		GROUP BY TRIM(client_ip)
+		ORDER BY %s %s, requests DESC, ip ASC
+		LIMIT $4 OFFSET $5
+	`, sortColumn, sortOrder)
+	rows, err := db.conn.QueryContext(ctx, sql, qpsStart, rpmStart, windowStartArg, pageSize, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := make([]IPUsageStat, 0, pageSize)
+	for rows.Next() {
+		var stat IPUsageStat
+		if err := rows.Scan(&stat.IP, &stat.Requests, &stat.Tokens, &stat.Cost, &stat.QPS, &stat.RPM, &stat.TPM); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return &IPUsageStatsPage{
+		Stats:    stats,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+	}, nil
+}
+
+func ipUsageStatsSortColumn(sortBy string) string {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "ip":
+		return "ip"
+	case "rpm":
+		return "rpm"
+	case "tpm":
+		return "tpm"
+	case "tokens":
+		return "tokens"
+	case "cost":
+		return "cost"
+	default:
+		return "requests"
+	}
 }
 
 func (db *DB) CountIPUsageStats(ctx context.Context) (int64, error) {

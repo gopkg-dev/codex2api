@@ -19,7 +19,6 @@ import (
 	"github.com/codex2api/cache"
 	"github.com/codex2api/config"
 	"github.com/codex2api/database"
-	"github.com/codex2api/internal/imagestore"
 	"github.com/codex2api/proxy"
 	"github.com/codex2api/proxy/wsrelay"
 	"github.com/codex2api/security"
@@ -87,13 +86,6 @@ func main() {
 			RedisPoolSize:                    30,
 			AutoCleanUnauthorized:            false,
 			AutoCleanRateLimited:             false,
-			PromptFilterMode:                 "monitor",
-			PromptFilterThreshold:            50,
-			PromptFilterStrictThreshold:      90,
-			PromptFilterLogMatches:           true,
-			PromptFilterMaxTextLength:        81920,
-			PromptFilterCustomPatterns:       "[]",
-			PromptFilterDisabledPatterns:     "[]",
 			ClientCompatMode:                 proxy.ClientCompatModePreserve,
 			CodexMinCLIVersion:               "0.118.0",
 			UsageLogMode:                     database.UsageLogModeFull,
@@ -101,7 +93,6 @@ func main() {
 			UsageLogFlushIntervalSeconds:     5,
 			StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 			StreamFlushIntervalMS:            20,
-			ImageStorageConfig:               "{}",
 			FilterLocalFallbackResponse:      true,
 			APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 		}
@@ -127,13 +118,6 @@ func main() {
 			LazyMode:                         false,
 			PgMaxConns:                       50,
 			RedisPoolSize:                    30,
-			PromptFilterMode:                 "monitor",
-			PromptFilterThreshold:            50,
-			PromptFilterStrictThreshold:      90,
-			PromptFilterLogMatches:           true,
-			PromptFilterMaxTextLength:        81920,
-			PromptFilterCustomPatterns:       "[]",
-			PromptFilterDisabledPatterns:     "[]",
 			ClientCompatMode:                 proxy.ClientCompatModePreserve,
 			CodexMinCLIVersion:               "0.118.0",
 			UsageLogMode:                     database.UsageLogModeFull,
@@ -141,7 +125,6 @@ func main() {
 			UsageLogFlushIntervalSeconds:     5,
 			StreamFlushPolicy:                proxy.StreamFlushPolicyImmediate,
 			StreamFlushIntervalMS:            20,
-			ImageStorageConfig:               "{}",
 			FilterLocalFallbackResponse:      true,
 			APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
 		}
@@ -198,17 +181,6 @@ func main() {
 		runtimeSettings.StreamFlushPolicy,
 		runtimeSettings.StreamFlushIntervalMS,
 	)
-
-	// 4b'. 应用图片存储后端配置
-	imgLocalDir := strings.TrimSpace(os.Getenv("IMAGE_ASSET_DIR"))
-	if imgLocalDir == "" {
-		imgLocalDir = "/data/images"
-	}
-	if imgCfg, err := imagestore.ApplyFromJSON(settings.ImageStorageConfig, imgLocalDir); err != nil {
-		log.Printf("图片存储配置应用失败，已回退到本地: %v", err)
-	} else {
-		log.Printf("图片存储后端: %s", imgCfg.Backend)
-	}
 
 	// 4c. 初始化 Resin 粘性代理池
 	if settings.ResinURL != "" && settings.ResinPlatformName != "" {
@@ -545,9 +517,6 @@ func shouldSkipAccessLog(method string, path string, status int) bool {
 		return false
 	}
 	if method == http.MethodGet && path == "/api/admin/health" {
-		return true
-	}
-	if method == http.MethodGet && (path == "/api/admin/images/jobs" || strings.HasPrefix(path, "/api/admin/images/jobs/")) {
 		return true
 	}
 	return false

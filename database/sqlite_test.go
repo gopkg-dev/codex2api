@@ -285,7 +285,6 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 		UsageLogFlushIntervalSeconds:     5,
 		StreamFlushPolicy:                "immediate",
 		StreamFlushIntervalMS:            20,
-		ImageStorageConfig:               "{}",
 		IPQPSLimit:                       3,
 		IPRPMLimit:                       7,
 		FilterLocalFallbackResponse:      true,
@@ -1774,6 +1773,40 @@ func TestSQLiteGetIPUsageStatsAggregatesRecentTraffic(t *testing.T) {
 	}
 	if len(limited) != 2 {
 		t.Fatalf("len(limited) = %d, want 2 (%#v)", len(limited), limited)
+	}
+
+	page, err := db.GetIPUsageStatsPage(ctx, IPUsageStatsQuery{
+		Page:        1,
+		PageSize:    2,
+		WindowStart: now.Add(-5 * time.Minute),
+		SortBy:      "tokens",
+		SortOrder:   "asc",
+	})
+	if err != nil {
+		t.Fatalf("GetIPUsageStatsPage 返回错误: %v", err)
+	}
+	if page.Total != 3 || page.Page != 1 || page.PageSize != 2 {
+		t.Fatalf("page meta = total %d page %d size %d, want 3/1/2", page.Total, page.Page, page.PageSize)
+	}
+	if len(page.Stats) != 2 {
+		t.Fatalf("len(page.Stats) = %d, want 2 (%#v)", len(page.Stats), page.Stats)
+	}
+	if page.Stats[0].IP != "203.0.113.10" || page.Stats[1].IP != "198.51.100.2" {
+		t.Fatalf("token asc order = %#v, want 203.0.113.10 then 198.51.100.2", page.Stats)
+	}
+
+	secondPage, err := db.GetIPUsageStatsPage(ctx, IPUsageStatsQuery{
+		Page:        2,
+		PageSize:    2,
+		WindowStart: now.Add(-5 * time.Minute),
+		SortBy:      "tokens",
+		SortOrder:   "asc",
+	})
+	if err != nil {
+		t.Fatalf("GetIPUsageStatsPage second 返回错误: %v", err)
+	}
+	if len(secondPage.Stats) != 1 || secondPage.Stats[0].IP != "203.0.113.8" {
+		t.Fatalf("second page = %#v, want only 203.0.113.8", secondPage.Stats)
 	}
 }
 

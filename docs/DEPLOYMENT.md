@@ -180,7 +180,6 @@ CODEX_BIND=0.0.0.0
 DATABASE_DRIVER=sqlite
 DATABASE_PATH=/tmp/codex2api.db
 CACHE_DRIVER=memory
-IMAGE_ASSET_DIR=/tmp/images
 LOG_DIR=/tmp/logs
 LOG_DISABLED=true
 ADMIN_SECRET=replace-with-a-strong-secret

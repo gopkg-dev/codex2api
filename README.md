@@ -19,14 +19,14 @@
 
 **Turn a Codex account pool into an observable, schedulable, operations-ready OpenAI / Anthropic compatible gateway.** Codex2API is not a thin forwarding proxy. It is a long-running Codex access hub: it exposes `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, Images, and Models endpoints while managing Refresh Token / Access Token accounts, health scoring, dynamic concurrency, rate-limit recovery, usage tracking, and admin operations behind the scenes.
 
-Run it as a full **PostgreSQL + Redis** production stack or as a single-container **SQLite + in-memory cache** deployment. Point Codex CLI, Claude Code, the OpenAI SDK, or any compatible client at one Base URL, then manage accounts, proxies, API keys, prompt filtering, image workflows, and runtime settings from the built-in dashboard.
+Run it as a full **PostgreSQL + Redis** production stack or as a single-container **SQLite + in-memory cache** deployment. Point Codex CLI, Claude Code, the OpenAI SDK, or any compatible client at one Base URL, then manage accounts, proxies, API keys, usage analytics, operations, and runtime settings from the built-in dashboard.
 
 <table>
 <tr><td width="210"><b>One compatible gateway</b></td><td>OpenAI-style Chat Completions / Responses / Images, Anthropic Messages, prefixless compatibility routes, and native Codex Responses forwarding are all exposed through one service.</td></tr>
 <tr><td><b>Account-pool scheduler</b></td><td>Selection is driven by account status, health tier, scheduler score, dynamic concurrency, cooldown recovery, and recent usage so unhealthy accounts are avoided automatically. Supports <code>round_robin</code> and <code>remaining_quota</code> modes, with per-account credit billing flags.</td></tr>
-<tr><td><b>Visual admin console</b></td><td>The embedded React / Vite dashboard covers account import and testing, API keys, proxy pools, image studio (text-to-image + image-to-image), prompt filtering, usage analytics, operations, scheduler board, and system settings.</td></tr>
+<tr><td><b>Visual admin console</b></td><td>The embedded React / Vite dashboard covers account import and testing, API keys, proxy pools, usage analytics, operations, scheduler board, and system settings.</td></tr>
 <tr><td><b>Two deployment shapes</b></td><td>Use PostgreSQL + Redis for production or SQLite + Memory for lightweight single-node deployments; Docker images, source builds, local development, and the interactive deploy script are ready to use. SQLite mode binds to <code>127.0.0.1</code> by default for security.</td></tr>
-<tr><td><b>Billing and observability</b></td><td>Per-account 5h/7d windowed USD cost tracking, credit quota support, API key usage tracking, OAuth PKCE token acquisition, prompt filtering, and a usage dashboard with request logs and trend charts.</td></tr>
+<tr><td><b>Billing and observability</b></td><td>Per-account 5h/7d windowed USD cost tracking, credit quota support, API key usage tracking, OAuth PKCE token acquisition, and a usage dashboard with request logs and trend charts.</td></tr>
 </table>
 
 ---
@@ -52,10 +52,6 @@ Run it as a full **PostgreSQL + Redis** production stack or as a single-containe
 | Accounts | Dashboard Trends |
 | --- | --- |
 | ![Accounts](docs/screenshots/accounts.png) | ![Dashboard Trends](docs/screenshots/dashboard-trends.png) |
-
-| Image Studio | Prompt Filter |
-| --- | --- |
-| ![Image Studio](docs/screenshots/image-studio.png) | ![Prompt Filter](docs/screenshots/prompt-filter.png) |
 
 | Operations | Usage |
 | --- | --- |
@@ -166,7 +162,6 @@ Notes:
 - Before switching deployment modes, replace `.env` with the matching example file.
 - The SQLite lightweight mode runs a single `codex2api` container and stores data at `/data/codex2api.db`.
 - **SQLite compose files bind to `127.0.0.1` by default for security.** To expose the SQLite service on all interfaces, set `BIND_HOST=0.0.0.0` in `.env` or override the port binding in the compose file. The standard compose files bind to `0.0.0.0` by default.
-- The image studio library is stored under `/data/images`; Docker configurations persist `/data`.
 - `docker compose down` does not delete named volumes by default. Data is removed only by commands such as `docker compose down -v`, `docker volume rm`, or `docker volume prune`.
 
 ---
@@ -386,8 +381,6 @@ Open `/admin/` in a browser.
 | Accounts | `/admin/accounts` | Import, test, batch actions, scheduler state |
 | API Keys | `/admin/api-keys` | API key creation, inspection, deletion, and credential management |
 | Proxies | `/admin/proxies` | Proxy pool management, account proxy assignment, connectivity checks |
-| Image Studio | `/admin/images/studio` | Text-to-image, image-to-image, prompt templates, task history, server-side image library |
-| Prompt Filter | `/admin/prompt-filter/overview` | Rules, hit logs, testing, and handling mode configuration |
 | Usage | `/admin/usage` | Request logs, metric cards, charts, log cleanup |
 | Operations | `/admin/ops` | Runtime monitoring and system overview |
 | Scheduler Board | `/admin/ops/scheduler` | Scheduler health, penalties, and score breakdown |
@@ -492,7 +485,7 @@ codex2api/
 |- database/                    # Database access layer
 |- proxy/                       # Public proxy, forwarding, rate limiting
 `- frontend/                    # React + Vite admin dashboard
-   |- src/pages/                # Dashboard / Accounts / API Keys / Proxies / Images / Prompt Filter / Ops / Usage / Settings / Docs
+   |- src/pages/                # Dashboard / Accounts / API Keys / Proxies / Ops / Usage / Settings / Docs
    |- src/components/           # UI components
    |- src/locales/              # zh/en locales
    `- vite.config.js            # Vite config

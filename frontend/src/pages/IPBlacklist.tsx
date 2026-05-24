@@ -1,13 +1,35 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Ban, Clock, Trash2 } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Ban,
+  Clock,
+  ListChecks,
+  RefreshCw,
+  Trash2,
+  Trophy,
+} from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import Modal from "../components/Modal";
 import Pagination from "../components/Pagination";
-import StateShell from "../components/StateShell";
 import ToastNotice from "../components/ToastNotice";
 import { useToast } from "../hooks/useToast";
 import { api } from "../api";
-import type { IPBan } from "../types";
+import type {
+  IPBan,
+  IPStatsSort,
+  IPStatsWindow,
+  IPUsageStat,
+  SortOrder,
+} from "../types";
 import { getErrorMessage } from "../utils/error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,6 +42,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+
+type IPBlacklistTab = "ranking" | "bans";
+
+const IP_STATS_WINDOWS: Array<{ key: IPStatsWindow; label: string }> = [
+  { key: "1m", label: "1分钟" },
+  { key: "5m", label: "5分钟" },
+  { key: "15m", label: "15分钟" },
+  { key: "1h", label: "1小时" },
+  { key: "today", label: "今日" },
+];
 
 function IPBanCard({
   title,
@@ -73,11 +105,292 @@ function Field({
   );
 }
 
+function TabButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition ${
+        active
+          ? "bg-background text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
+function IPUsageRankingCard({
+  stats,
+  total,
+  page,
+  pageSize,
+  windowKey,
+  sort,
+  order,
+  loading,
+  onWindowChange,
+  onSortChange,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  stats: IPUsageStat[];
+  total: number;
+  page: number;
+  pageSize: number;
+  windowKey: IPStatsWindow;
+  sort: IPStatsSort;
+  order: SortOrder;
+  loading: boolean;
+  onWindowChange: (windowKey: IPStatsWindow) => void;
+  onSortChange: (sort: IPStatsSort) => void;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const columns: Array<{
+    key: IPStatsSort;
+    label: string;
+    align?: "right";
+  }> = [
+    { key: "ip", label: "IP" },
+    { key: "status", label: "状态" },
+    { key: "requests", label: "请求数", align: "right" },
+    { key: "rpm", label: "RPM", align: "right" },
+    { key: "tpm", label: "TPM", align: "right" },
+    { key: "tokens", label: "Token", align: "right" },
+    { key: "cost", label: "费用", align: "right" },
+  ];
+  return (
+    <IPBanCard
+      title="IP 使用排行榜"
+      description={`${getIPStatsWindowLabel(windowKey)}实时状态，支持分页和字段排序。`}
+    >
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="inline-flex w-fit items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+          <Trophy className="size-4 text-yellow-500" />
+          {getIPStatsWindowLabel(windowKey)}
+          <span className="ml-2 rounded-md bg-background/70 px-2 py-0.5 font-mono text-xs tabular-nums">
+            {formatInteger(total)} IP
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {IP_STATS_WINDOWS.map((option) => (
+            <Button
+              key={option.key}
+              type="button"
+              size="sm"
+              variant={windowKey === option.key ? "default" : "outline"}
+              className="h-8 px-3 text-xs"
+              onClick={() => onWindowChange(option.key)}
+              disabled={loading && windowKey === option.key}
+            >
+              {loading && windowKey === option.key ? (
+                <RefreshCw className="mr-1 size-3 animate-spin" />
+              ) : null}
+              {option.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-10 animate-pulse rounded-md bg-muted"
+            />
+          ))}
+        </div>
+      ) : stats.length > 0 ? (
+        <>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {columns.map((column) => (
+                    <TableHead
+                      key={column.key}
+                      className={column.align === "right" ? "text-right" : ""}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onSortChange(column.key)}
+                        className={`inline-flex items-center gap-1 rounded px-1 py-0.5 text-xs font-semibold transition hover:text-foreground ${
+                          column.align === "right" ? "ml-auto" : ""
+                        }`}
+                      >
+                        {column.label}
+                        <SortIcon active={sort === column.key} order={order} />
+                      </button>
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {stats.map((item) => (
+                  <TableRow key={item.ip}>
+                    <TableCell
+                      className="max-w-[220px] truncate font-mono text-sm"
+                      title={item.ip}
+                    >
+                      {item.ip}
+                    </TableCell>
+                    <TableCell>
+                      <IPStatusBadge status={item.status} />
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatInteger(item.requests)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatInteger(Math.round(item.rpm))}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCompactNumber(Math.round(item.tpm))}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatCompactNumber(item.tokens)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {formatMoneyFixed2(item.cost)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            totalItems={total}
+            pageSize={pageSize}
+            onPageChange={onPageChange}
+            onPageSizeChange={onPageSizeChange}
+            pageSizeOptions={[10, 20, 50, 100]}
+          />
+        </>
+      ) : (
+        <div className="flex min-h-[120px] items-center justify-center rounded-lg border border-dashed border-border bg-muted/20 text-sm text-muted-foreground">
+          {getIPStatsWindowLabel(windowKey)}暂无已完成的 API 代理请求
+        </div>
+      )}
+    </IPBanCard>
+  );
+}
+
+function SortIcon({ active, order }: { active: boolean; order: SortOrder }) {
+  if (!active) return <ArrowUpDown className="size-3.5 opacity-45" />;
+  return order === "asc" ? (
+    <ArrowUp className="size-3.5" />
+  ) : (
+    <ArrowDown className="size-3.5" />
+  );
+}
+
+function IPStatusBadge({ status }: { status?: string }) {
+  const config = getIPStatusConfig(status);
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold ${config.className}`}
+    >
+      <span className="size-1.5 rounded-full bg-current" />
+      {config.label}
+    </span>
+  );
+}
+
+function getIPStatusConfig(status?: string): {
+  label: string;
+  className: string;
+} {
+  switch (status) {
+    case "banned":
+      return {
+        label: "已封禁",
+        className: "bg-red-500/10 text-red-600 dark:text-red-300",
+      };
+    case "abnormal":
+      return {
+        label: "异常",
+        className: "bg-orange-500/10 text-orange-600 dark:text-orange-300",
+      };
+    case "watch":
+      return {
+        label: "关注",
+        className: "bg-amber-500/10 text-amber-600 dark:text-amber-300",
+      };
+    default:
+      return {
+        label: "正常",
+        className: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+      };
+  }
+}
+
 function formatDate(value?: string) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString();
+}
+
+function getIPStatsWindowLabel(windowKey: IPStatsWindow): string {
+  switch (windowKey) {
+    case "1m":
+      return "最近 1 分钟";
+    case "15m":
+      return "最近 15 分钟";
+    case "1h":
+      return "最近 1 小时";
+    case "today":
+      return "今日";
+    default:
+      return "最近 5 分钟";
+  }
+}
+
+function formatInteger(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.round(value).toLocaleString();
+}
+
+function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  const abs = Math.abs(value);
+  const sign = value < 0 ? "-" : "";
+  if (abs >= 1_000_000_000) {
+    return `${sign}${trimFixed(abs / 1_000_000_000, 1)}B`;
+  }
+  if (abs >= 1_000_000) {
+    return `${sign}${trimFixed(abs / 1_000_000, 1)}M`;
+  }
+  if (abs >= 1_000) {
+    return `${sign}${trimFixed(abs / 1_000, 1)}K`;
+  }
+  return `${Math.round(value)}`;
+}
+
+function trimFixed(value: number, digits: number): string {
+  return value.toFixed(digits).replace(/\.0$/, "");
+}
+
+function formatMoneyFixed2(value: number): string {
+  if (!Number.isFinite(value)) return "$0.00";
+  return `$${value.toFixed(2)}`;
 }
 
 function banReasonLabel(reason: string) {
@@ -160,20 +473,72 @@ function parseIPBanInput(value: string): string[] {
 
 export default function IPBlacklist() {
   const { toast, showToast } = useToast();
+  const [activeTab, setActiveTab] = useState<IPBlacklistTab>("ranking");
+  const [ipStats, setIPStats] = useState<IPUsageStat[]>([]);
+  const [ipStatsTotal, setIPStatsTotal] = useState(0);
+  const [ipStatsPage, setIPStatsPage] = useState(1);
+  const [ipStatsPageSize, setIPStatsPageSize] = useState(20);
+  const [ipStatsWindow, setIPStatsWindow] = useState<IPStatsWindow>("5m");
+  const [ipStatsSort, setIPStatsSort] = useState<IPStatsSort>("requests");
+  const [ipStatsOrder, setIPStatsOrder] = useState<SortOrder>("desc");
+  const [ipStatsLoading, setIPStatsLoading] = useState(true);
+  const ipStatsLoadSeq = useRef(0);
   const [bans, setBans] = useState<IPBan[]>([]);
   const [bansTotal, setBansTotal] = useState(0);
   const [banPage, setBanPage] = useState(1);
   const [banPageSize, setBanPageSize] = useState(20);
-  const [loading, setLoading] = useState(true);
+  const [bansLoading, setBansLoading] = useState(true);
   const [newIPs, setNewIPs] = useState("");
   const [newExpiresIn, setNewExpiresIn] = useState(0);
   const [batchBanOpen, setBatchBanOpen] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const pendingIPs = useMemo(() => parseIPBanInput(newIPs), [newIPs]);
 
+  const loadIPStats = useCallback(
+    async (options?: {
+      windowKey?: IPStatsWindow;
+      page?: number;
+      pageSize?: number;
+      sort?: IPStatsSort;
+      order?: SortOrder;
+    }) => {
+      const seq = ipStatsLoadSeq.current + 1;
+      ipStatsLoadSeq.current = seq;
+      setIPStatsLoading(true);
+      try {
+        const response = await api.getIPUsageStats({
+          window: options?.windowKey ?? ipStatsWindow,
+          page: options?.page ?? ipStatsPage,
+          pageSize: options?.pageSize ?? ipStatsPageSize,
+          sort: options?.sort ?? ipStatsSort,
+          order: options?.order ?? ipStatsOrder,
+        });
+        if (seq !== ipStatsLoadSeq.current) return;
+        setIPStats(response.stats ?? []);
+        setIPStatsTotal(response.total ?? 0);
+      } catch (error) {
+        if (seq === ipStatsLoadSeq.current) {
+          showToast(`加载排行榜失败：${getErrorMessage(error)}`, "error");
+        }
+      } finally {
+        if (seq === ipStatsLoadSeq.current) {
+          setIPStatsLoading(false);
+        }
+      }
+    },
+    [
+      ipStatsOrder,
+      ipStatsPage,
+      ipStatsPageSize,
+      ipStatsSort,
+      ipStatsWindow,
+      showToast,
+    ],
+  );
+
   const reload = useCallback(
     async (options?: { page?: number; pageSize?: number }) => {
-      setLoading(true);
+      setBansLoading(true);
       try {
         const nextPage = options?.page ?? banPage;
         const nextPageSize = options?.pageSize ?? banPageSize;
@@ -186,7 +551,7 @@ export default function IPBlacklist() {
       } catch (error) {
         showToast(`加载失败：${getErrorMessage(error)}`, "error");
       } finally {
-        setLoading(false);
+        setBansLoading(false);
       }
     },
     [banPage, banPageSize, showToast],
@@ -195,6 +560,18 @@ export default function IPBlacklist() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    void loadIPStats();
+  }, [loadIPStats]);
+
+  useEffect(() => {
+    if (activeTab !== "ranking") return;
+    const timer = window.setInterval(() => {
+      void loadIPStats();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [activeTab, loadIPStats]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -256,6 +633,25 @@ export default function IPBlacklist() {
 
   const banTotalPages = Math.max(1, Math.ceil(bansTotal / banPageSize));
   const currentBanPage = Math.min(banPage, banTotalPages);
+  const ipStatsTotalPages = Math.max(
+    1,
+    Math.ceil(ipStatsTotal / ipStatsPageSize),
+  );
+
+  const changeIPStatsWindow = (windowKey: IPStatsWindow) => {
+    setIPStatsWindow(windowKey);
+    setIPStatsPage(1);
+  };
+
+  const changeIPStatsSort = (sort: IPStatsSort) => {
+    setIPStatsPage(1);
+    if (sort === ipStatsSort) {
+      setIPStatsOrder((current) => (current === "desc" ? "asc" : "desc"));
+      return;
+    }
+    setIPStatsSort(sort);
+    setIPStatsOrder(sort === "ip" ? "asc" : "desc");
+  };
 
   useEffect(() => {
     if (banPage > banTotalPages) {
@@ -263,136 +659,186 @@ export default function IPBlacklist() {
     }
   }, [banPage, banTotalPages]);
 
-  if (loading) {
-    return (
-      <StateShell
-        variant="page"
-        loading
-        loadingTitle="加载 IP 黑名单"
-        loadingDescription="正在同步封禁列表。"
-      >
-        {null}
-      </StateShell>
-    );
-  }
+  useEffect(() => {
+    if (ipStatsPage > ipStatsTotalPages) {
+      setIPStatsPage(ipStatsTotalPages);
+    }
+  }, [ipStatsPage, ipStatsTotalPages]);
 
   return (
     <div>
       <ToastNotice toast={toast} />
       <PageHeader
         title="IP 黑名单"
-        description="管理手动封禁和自动封禁记录，仅作用于 /v1 接口。"
-        onRefresh={() => void reload()}
+        description="查看 IP 使用排行榜，管理手动封禁和自动封禁记录。"
+        onRefresh={() => {
+          if (activeTab === "ranking") {
+            void loadIPStats();
+          } else {
+            void reload();
+          }
+        }}
         actions={
-          <Button onClick={() => setBatchBanOpen(true)}>
-            <Ban className="size-4" />
-            批量添加 IP
-          </Button>
+          activeTab === "bans" ? (
+            <Button onClick={() => setBatchBanOpen(true)}>
+              <Ban className="size-4" />
+              批量添加 IP
+            </Button>
+          ) : undefined
         }
       />
 
-      <IPBanCard
-        title="封禁列表"
-        description="支持分页查询、手动解封和删除封禁记录。"
-      >
-        <div className="mb-4 text-xs text-muted-foreground">
-          当前共 {bansTotal} 条封禁记录
-        </div>
-        <div className="overflow-hidden rounded-lg border border-border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>IP</TableHead>
-                <TableHead>原因</TableHead>
-                <TableHead>来源</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>次数</TableHead>
-                <TableHead>最后封禁时间</TableHead>
-                <TableHead>解封/到期倒计时</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {bans.length === 0 ? (
+      <div className="mb-4 inline-flex rounded-lg border border-border bg-muted/40 p-1">
+        <TabButton
+          active={activeTab === "ranking"}
+          icon={<Trophy className="size-4" />}
+          label="使用排行榜"
+          onClick={() => setActiveTab("ranking")}
+        />
+        <TabButton
+          active={activeTab === "bans"}
+          icon={<ListChecks className="size-4" />}
+          label="黑名单管理"
+          onClick={() => setActiveTab("bans")}
+        />
+      </div>
+
+      {activeTab === "ranking" ? (
+        <IPUsageRankingCard
+          stats={ipStats}
+          total={ipStatsTotal}
+          page={Math.min(ipStatsPage, ipStatsTotalPages)}
+          pageSize={ipStatsPageSize}
+          windowKey={ipStatsWindow}
+          sort={ipStatsSort}
+          order={ipStatsOrder}
+          loading={ipStatsLoading}
+          onWindowChange={changeIPStatsWindow}
+          onSortChange={changeIPStatsSort}
+          onPageChange={setIPStatsPage}
+          onPageSizeChange={(next) => {
+            setIPStatsPage(1);
+            setIPStatsPageSize(next);
+          }}
+        />
+      ) : (
+        <IPBanCard
+          title="封禁列表"
+          description="支持分页查询、手动解封和删除封禁记录。"
+        >
+          <div className="mb-4 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>当前共 {bansTotal} 条封禁记录</span>
+            {bansLoading ? (
+              <span className="inline-flex items-center gap-1">
+                <RefreshCw className="size-3 animate-spin" />
+                正在加载
+              </span>
+            ) : null}
+          </div>
+          <div className="overflow-hidden rounded-lg border border-border">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="h-24 text-center text-muted-foreground"
-                  >
-                    暂无封禁记录
-                  </TableCell>
+                  <TableHead>IP</TableHead>
+                  <TableHead>原因</TableHead>
+                  <TableHead>来源</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead>次数</TableHead>
+                  <TableHead>最后封禁时间</TableHead>
+                  <TableHead>解封/到期倒计时</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
                 </TableRow>
-              ) : (
-                bans.map((ban) => {
-                  const status = banStatus(ban, now);
-                  return (
-                    <TableRow key={ban.id}>
-                      <TableCell className="font-mono text-sm">
-                        {ban.ip}
-                      </TableCell>
-                      <TableCell>{banReasonLabel(ban.reason)}</TableCell>
-                      <TableCell>{banSourceLabel(ban.source)}</TableCell>
-                      <TableCell>
-                        <span
-                          className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold ${status.className}`}
-                        >
-                          {status.label}
-                        </span>
-                      </TableCell>
-                      <TableCell>{ban.hit_count}</TableCell>
-                      <TableCell
-                        title={formatDate(
-                          ban.last_triggered_at || ban.banned_at,
-                        )}
-                      >
-                        {formatDate(ban.last_triggered_at || ban.banned_at)}
-                      </TableCell>
-                      <TableCell
-                        title={formatDate(ban.unbanned_at || ban.expires_at)}
-                      >
-                        {banReleaseTimeLabel(ban, now)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="inline-flex gap-1">
-                          {isBanActive(ban, now) ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => void unban(ban.id)}
-                            >
-                              <Clock className="size-3.5" />
-                              解封
-                            </Button>
-                          ) : null}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void remove(ban.id)}
-                          >
-                            <Trash2 className="size-3.5" />
-                          </Button>
-                        </div>
+              </TableHeader>
+              <TableBody>
+                {bansLoading ? (
+                  Array.from({ length: 6 }).map((_, index) => (
+                    <TableRow key={index}>
+                      <TableCell colSpan={8}>
+                        <div className="h-8 animate-pulse rounded bg-muted" />
                       </TableCell>
                     </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <Pagination
-          page={currentBanPage}
-          totalPages={banTotalPages}
-          totalItems={bansTotal}
-          pageSize={banPageSize}
-          onPageChange={setBanPage}
-          onPageSizeChange={(next) => {
-            setBanPage(1);
-            setBanPageSize(next);
-          }}
-          pageSizeOptions={[10, 20, 50, 100]}
-        />
-      </IPBanCard>
+                  ))
+                ) : bans.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={8}
+                      className="h-24 text-center text-muted-foreground"
+                    >
+                      暂无封禁记录
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  bans.map((ban) => {
+                    const status = banStatus(ban, now);
+                    return (
+                      <TableRow key={ban.id}>
+                        <TableCell className="font-mono text-sm">
+                          {ban.ip}
+                        </TableCell>
+                        <TableCell>{banReasonLabel(ban.reason)}</TableCell>
+                        <TableCell>{banSourceLabel(ban.source)}</TableCell>
+                        <TableCell>
+                          <span
+                            className={`inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold ${status.className}`}
+                          >
+                            {status.label}
+                          </span>
+                        </TableCell>
+                        <TableCell>{ban.hit_count}</TableCell>
+                        <TableCell
+                          title={formatDate(
+                            ban.last_triggered_at || ban.banned_at,
+                          )}
+                        >
+                          {formatDate(ban.last_triggered_at || ban.banned_at)}
+                        </TableCell>
+                        <TableCell
+                          title={formatDate(ban.unbanned_at || ban.expires_at)}
+                        >
+                          {banReleaseTimeLabel(ban, now)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="inline-flex gap-1">
+                            {isBanActive(ban, now) ? (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void unban(ban.id)}
+                              >
+                                <Clock className="size-3.5" />
+                                解封
+                              </Button>
+                            ) : null}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void remove(ban.id)}
+                            >
+                              <Trash2 className="size-3.5" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+          <Pagination
+            page={currentBanPage}
+            totalPages={banTotalPages}
+            totalItems={bansTotal}
+            pageSize={banPageSize}
+            onPageChange={setBanPage}
+            onPageSizeChange={(next) => {
+              setBanPage(1);
+              setBanPageSize(next);
+            }}
+            pageSizeOptions={[10, 20, 50, 100]}
+          />
+        </IPBanCard>
+      )}
 
       <Modal
         show={batchBanOpen}

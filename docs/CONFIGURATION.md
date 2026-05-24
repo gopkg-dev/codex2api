@@ -76,12 +76,6 @@ Codex2API 采用三层配置架构：
 | `DATABASE_SCHEMA` | 否 | - | PostgreSQL schema；适合 Supabase 等多项目共享 database 的场景。配置后启动时自动 `CREATE SCHEMA IF NOT EXISTS` 并将所有连接的 `search_path` 指向该 schema。仅允许字母/数字/下划线，长度 ≤63；留空保持默认（通常是 `public`）。|
 | `DATABASE_SSLMODE` | 否 | disable | SSL 模式: disable/require/verify-full |
 
-### 生图工作台
-
-| 变量 | 必填 | 默认值 | 说明 |
-|------|------|--------|------|
-| `IMAGE_ASSET_DIR` | 否 | `/data/images` | 管理台生图工作台保存图片文件的服务器目录；Docker 部署建议持久化 `/data` |
-
 ### 日志目录
 
 | 变量 | 必填 | 默认值 | 说明 |
@@ -208,7 +202,6 @@ DATABASE_USER=codex2api
 DATABASE_PASSWORD=your-strong-db-password
 DATABASE_NAME=codex2api
 DATABASE_SSLMODE=disable
-IMAGE_ASSET_DIR=/data/images
 LOG_DIR=logs
 LOG_DISABLED=false
 
@@ -237,7 +230,6 @@ TZ=Asia/Shanghai
 # 数据库配置 (SQLite)
 DATABASE_DRIVER=sqlite
 DATABASE_PATH=/data/codex2api.db
-IMAGE_ASSET_DIR=/data/images
 LOG_DIR=logs
 LOG_DISABLED=false
 
