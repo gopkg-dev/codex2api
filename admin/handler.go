@@ -3586,7 +3586,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	} else {
 		// 验证用户提供的key格式
 		key = security.SanitizeInput(key)
-		if !strings.HasPrefix(key, "sk-") || len(key) < 20 {
+		if !strings.HasPrefix(key, "sk-") {
 			writeError(c, http.StatusBadRequest, "API Key格式无效")
 			return
 		}
