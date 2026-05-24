@@ -96,7 +96,7 @@ export default function PublicHome() {
   const { toast, showToast } = useToast();
   const [overview, setOverview] = useState<PublicHomeResponse | null>(null);
   const [chartData, setChartData] = useState<ChartAggregation | null>(null);
-  const [timeRange, setTimeRange] = useState<TimeRangeKey>("24h");
+  const [timeRange, setTimeRange] = useState<TimeRangeKey>("3h");
   const [loading, setLoading] = useState(true);
   const [chartLoading, setChartLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -621,7 +621,7 @@ export default function PublicHome() {
               >
                 <span className="size-1.5 rounded-full bg-emerald-500" />
                 <span className="text-xs font-semibold leading-none">
-                  全局限制
+                  限制
                 </span>
                 <span className="font-mono text-sm font-bold leading-none tabular-nums">
                   {(ops?.traffic.rpm_limit ?? 0) > 0
