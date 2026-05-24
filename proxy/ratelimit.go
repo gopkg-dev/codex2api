@@ -799,6 +799,7 @@ func ComputeCooldown(prevLevel int) (time.Duration, int) {
 type RateLimiter struct {
 	enhanced          *EnhancedRateLimiter
 	ipMu              sync.Mutex
+	globalRPMWindow   []time.Time
 	ipRPMWindows      map[string][]time.Time
 	ipQPSBuckets      map[string]*tokenBucket
 	ipBans            []ipBanEntry
@@ -811,6 +812,8 @@ type RateLimiter struct {
 	ipAutoBanCallback func(ip string, reason string, expiresAt time.Time)
 	now               func() time.Time
 }
+
+const contextRateLimitClientIP = "rate_limit_client_ip"
 
 type IPBanRule struct {
 	IP        string
@@ -850,6 +853,9 @@ func (rl *RateLimiter) UpdateRPM(rpm int) {
 	if rl.enhanced != nil {
 		rl.enhanced.UpdateGlobalRPM(rpm)
 	}
+	rl.ipMu.Lock()
+	rl.globalRPMWindow = nil
+	rl.ipMu.Unlock()
 }
 
 // GetRPM 获取当前 RPM（向后兼容）
@@ -1063,6 +1069,35 @@ func (rl *RateLimiter) allowIPRPM(ip string) bool {
 	return true
 }
 
+func (rl *RateLimiter) allowGlobalRPM() bool {
+	limit := rl.GetRPM()
+	if limit <= 0 {
+		return true
+	}
+	now := time.Now()
+	if rl.now != nil {
+		now = rl.now()
+	}
+	cutoff := now.Add(-time.Minute)
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	window := rl.globalRPMWindow
+	keepFrom := 0
+	for keepFrom < len(window) && !window[keepFrom].After(cutoff) {
+		keepFrom++
+	}
+	if keepFrom > 0 {
+		window = append(window[:0], window[keepFrom:]...)
+	}
+	if len(window) >= limit {
+		rl.globalRPMWindow = window
+		return false
+	}
+	window = append(window, now)
+	rl.globalRPMWindow = window
+	return true
+}
+
 func (rl *RateLimiter) allowIPQPS(ip string) bool {
 	limit := rl.GetIPQPSLimit()
 	if limit <= 0 || ip == "" {
@@ -1094,6 +1129,7 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 		}
 
 		clientIP := rateLimitClientIP(c)
+		c.Set(contextRateLimitClientIP, clientIP)
 		if rateLimitIsV1Path(path) {
 			runtimeSettings := CurrentRuntimeSettings()
 			fallbackMessage := runtimeMaintenanceMessage(runtimeSettings)
@@ -1144,7 +1180,7 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			if rl.enhanced != nil && !rl.enhanced.Allow() {
+			if !rl.allowGlobalRPM() {
 				c.JSON(http.StatusTooManyRequests, gin.H{
 					"error": gin.H{
 						"message": "请求过于频繁，请稍后重试",

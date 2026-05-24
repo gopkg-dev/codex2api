@@ -1143,6 +1143,74 @@ func TestRateLimiterAutoBansIPAfterQPSLimit(t *testing.T) {
 	}
 }
 
+func TestRateLimiterAutoBansIPOnConcurrentQPSBurst(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请稍后重试",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	rl := NewRateLimiter(0)
+	rl.UpdateIPQPSLimit(5)
+	rl.UpdateIPAutoBanConfig(IPAutoBanConfig{
+		Enabled:  true,
+		Duration: time.Hour,
+		BanOnRPM: true,
+		BanOnQPS: true,
+	})
+
+	var (
+		handlerHits int32
+		bannedIP    atomic.Value
+		banReason   atomic.Value
+	)
+	rl.SetIPAutoBanCallback(func(ip string, reason string, expiresAt time.Time) {
+		bannedIP.Store(ip)
+		banReason.Store(reason)
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		atomic.AddInt32(&handlerHits, 1)
+		time.Sleep(10 * time.Millisecond)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	const total = 14
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(total)
+	for i := 0; i < total; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+			req.RemoteAddr = "223.160.169.78:1234"
+			router.ServeHTTP(recorder, req)
+			if recorder.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200; body=%s", recorder.Code, recorder.Body.String())
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if hits := atomic.LoadInt32(&handlerHits); hits > 5 {
+		t.Fatalf("handler hits = %d, want at most 5", hits)
+	}
+	if got, _ := bannedIP.Load().(string); got != "223.160.169.78" {
+		t.Fatalf("auto ban ip = %q, want 223.160.169.78", got)
+	}
+	if got, _ := banReason.Load().(string); got != "qps_limit" {
+		t.Fatalf("auto ban reason = %q, want qps_limit", got)
+	}
+}
+
 func TestRateLimiterAutoBanRunsBeforeGlobalRPM(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
@@ -1237,6 +1305,28 @@ func TestRateLimiterGlobalRPMOnlyAppliesToV1(t *testing.T) {
 	}
 	if !strings.Contains(v1Two.Body.String(), "rate_limit_exceeded") {
 		t.Fatalf("second /v1 body = %s, want global rate limit error", v1Two.Body.String())
+	}
+}
+
+func TestRateLimiterGlobalRPMUsesRollingMinuteWindow(t *testing.T) {
+	now := time.Date(2026, 5, 24, 23, 7, 0, 0, time.UTC)
+	rl := NewRateLimiter(100)
+	rl.now = func() time.Time { return now }
+
+	for i := 0; i < 100; i++ {
+		if !rl.allowGlobalRPM() {
+			t.Fatalf("request %d blocked, want allowed", i+1)
+		}
+		now = now.Add(300 * time.Millisecond)
+	}
+
+	if rl.allowGlobalRPM() {
+		t.Fatal("request 101 allowed inside rolling minute, want blocked")
+	}
+
+	now = now.Add(31 * time.Second)
+	if !rl.allowGlobalRPM() {
+		t.Fatal("request after rolling minute blocked, want allowed")
 	}
 }
 

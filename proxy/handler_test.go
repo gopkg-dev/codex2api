@@ -29,6 +29,25 @@ func TestSupportedModelsIncludeLatestRequestedModels(t *testing.T) {
 	}
 }
 
+func TestLogUsageForRequestUsesRateLimitClientIP(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "223.160.169.78, 127.0.0.1")
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = req
+	ctx.Set(contextRateLimitClientIP, "223.160.169.78")
+
+	input := &database.UsageLogInput{}
+	(&Handler{}).logUsageForRequest(ctx, input)
+
+	if input.ClientIP != "223.160.169.78" {
+		t.Fatalf("client ip = %q, want rate limiter client ip", input.ClientIP)
+	}
+}
+
 func TestSupportedModelsExcludeBelowGPT52(t *testing.T) {
 	for _, model := range []string{
 		"gpt-5", "gpt-5-codex", "gpt-5-codex-mini",

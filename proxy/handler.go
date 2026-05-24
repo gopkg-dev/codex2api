@@ -514,7 +514,14 @@ func populateAPIKeyMetaFromContext(c *gin.Context, input *database.UsageLogInput
 func (h *Handler) logUsageForRequest(c *gin.Context, input *database.UsageLogInput) {
 	populateAPIKeyMetaFromContext(c, input)
 	if c != nil && input != nil && input.ClientIP == "" {
-		input.ClientIP = c.ClientIP()
+		if v, exists := c.Get(contextRateLimitClientIP); exists && v != nil {
+			if ip, ok := v.(string); ok && strings.TrimSpace(ip) != "" {
+				input.ClientIP = ip
+			}
+		}
+		if input.ClientIP == "" {
+			input.ClientIP = c.ClientIP()
+		}
 	}
 	h.logUsage(input)
 }
