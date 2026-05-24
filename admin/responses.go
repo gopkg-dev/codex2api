@@ -55,17 +55,18 @@ type apiKeysResponse struct {
 
 // MaskedAPIKeyRow API Key 响应（含脱敏和完整 key）
 type MaskedAPIKeyRow struct {
-	ID              int64   `json:"id"`
-	Name            string  `json:"name"`
-	Key             string  `json:"key"`
-	RawKey          string  `json:"raw_key"`
-	QuotaLimit      float64 `json:"quota_limit"`
-	QuotaUsed       float64 `json:"quota_used"`
-	ExpiresAt       *string `json:"expires_at"`
-	AllowedGroupIDs []int64 `json:"allowed_group_ids"`
-	Disabled        bool    `json:"disabled"`
-	Status          string  `json:"status"`
-	CreatedAt       string  `json:"created_at"`
+	ID              int64                 `json:"id"`
+	Name            string                `json:"name"`
+	Key             string                `json:"key"`
+	RawKey          string                `json:"raw_key"`
+	QuotaLimit      float64               `json:"quota_limit"`
+	QuotaUsed       float64               `json:"quota_used"`
+	ExpiresAt       *string               `json:"expires_at"`
+	AllowedGroupIDs []int64               `json:"allowed_group_ids"`
+	Disabled        bool                  `json:"disabled"`
+	Limits          database.APIKeyLimits `json:"limits"`
+	Status          string                `json:"status"`
+	CreatedAt       string                `json:"created_at"`
 }
 
 // NewMaskedAPIKeyRow 创建 API Key 响应
@@ -93,6 +94,7 @@ func NewMaskedAPIKeyRow(row *database.APIKeyRow) *MaskedAPIKeyRow {
 		ExpiresAt:       expiresAt,
 		AllowedGroupIDs: append([]int64(nil), row.AllowedGroupIDs...),
 		Disabled:        row.Disabled,
+		Limits:          row.Limits,
 		Status:          status,
 		CreatedAt:       row.CreatedAt.Format(time.RFC3339),
 	}

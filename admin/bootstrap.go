@@ -247,5 +247,6 @@ func defaultBootstrapSettings() *database.SystemSettings {
 		DownstreamUsageMultiplier:        1,
 		APIKeyDisabledMessage:            "API Key 已被禁用，请联系管理员。",
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(proxy.DefaultAPIMaintenanceConfig()),
+		AffinityMode:                     "bounded",
 	}
 }

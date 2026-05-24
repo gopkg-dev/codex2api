@@ -30,7 +30,7 @@ func (h *Handler) GetPublicHome(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
 
-	usage, err := h.getUsageStatsCached(ctx)
+	usage, err := h.getUsageStatsCached(ctx, time.Time{}, time.Time{})
 	if err != nil {
 		writeInternalError(c, err)
 		return

@@ -9,6 +9,10 @@ import StatusBadge from "../components/StatusBadge";
 import ToastNotice from "../components/ToastNotice";
 import { useDataLoader, type LoadOptions } from "../hooks/useDataLoader";
 import { useConfirmDialog } from "../hooks/useConfirmDialog";
+import {
+  DEFAULT_PAGE_SIZE_OPTIONS,
+  usePersistedPageSize,
+} from "../hooks/usePersistedPageSize";
 import { useToast } from "../hooks/useToast";
 import type {
   AccountRow,
@@ -262,10 +266,14 @@ async function runAccountBatch(
 
 export default function Accounts() {
   const { t } = useTranslation();
-  const pageSizeOptions = [10, 20, 50, 100];
+  const pageSizeOptions = DEFAULT_PAGE_SIZE_OPTIONS;
   const [showAdd, setShowAdd] = useState(false);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [pageSize, setPageSize] = usePersistedPageSize(
+    "accounts",
+    20,
+    pageSizeOptions,
+  );
   const [statusFilter, setStatusFilter] = useState<
     | "all"
     | "normal"
@@ -2320,6 +2328,14 @@ export default function Accounts() {
                 accounts={accounts}
                 compact
                 className="min-w-0"
+                onProbeStarted={() => {
+                  showToast(t('accounts.quotaDistributionRefreshStarted'), 'success')
+                  // 探针在后台并发执行；稍等一下再静默拉取，让首批结果有机会回流
+                  window.setTimeout(() => {
+                    void reloadSilently()
+                  }, 4000)
+                }}
+                onProbeError={(message) => showToast(message, 'error')}
               />
               <AccountRateLimitRecoveryChart
                 accounts={accounts}

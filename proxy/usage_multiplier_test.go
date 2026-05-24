@@ -53,7 +53,7 @@ func TestBuildCompactResponseOnlyScalesCachedUsageWithoutMutatingLogUsage(t *tes
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
 	usage := newUsageInfo(100, 20, 8, 40)
-	got := BuildCompactResponse("chatcmpl-test", "gpt-5.5", 123, "ok", nil, usage)
+	got := BuildCompactResponse("chatcmpl-test", "gpt-5.5", 123, "ok", "", nil, usage)
 
 	if value := gjson.GetBytes(got, "usage.prompt_tokens").Int(); value != 100 {
 		t.Fatalf("prompt_tokens = %d, want 100, body=%s", value, got)

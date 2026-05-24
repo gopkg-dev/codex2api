@@ -1216,7 +1216,7 @@ func TestUsageStatsIncludeBillingTotals(t *testing.T) {
 	}
 	db.flushLogs()
 
-	stats, err := db.GetUsageStats(ctx)
+	stats, err := db.GetUsageStats(ctx, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("GetUsageStats 返回错误: %v", err)
 	}
@@ -1315,7 +1315,7 @@ func TestUsageStatsIncludeCodex2APIBreakdowns(t *testing.T) {
 	}
 	db.flushLogs()
 
-	stats, err := db.GetUsageStats(ctx)
+	stats, err := db.GetUsageStats(ctx, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("GetUsageStats 返回错误: %v", err)
 	}
@@ -1404,7 +1404,7 @@ func TestUsageStatsBaselinePreservesCacheRateAndFirstTokenAfterClear(t *testing.
 		t.Fatalf("ClearUsageLogs 返回错误: %v", err)
 	}
 
-	stats, err := db.GetUsageStats(ctx)
+	stats, err := db.GetUsageStats(ctx, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("GetUsageStats 返回错误: %v", err)
 	}

@@ -172,7 +172,7 @@ func parseIPStatsWindowStart(value string, now time.Time) time.Time {
 }
 
 func (h *Handler) buildOpsOverview(ctx context.Context, ipWindowStart time.Time) (opsOverviewResponse, error) {
-	usageStats, err := h.getUsageStatsCached(ctx)
+	usageStats, err := h.getUsageStatsCached(ctx, time.Time{}, time.Time{})
 	if err != nil {
 		return opsOverviewResponse{}, err
 	}
