@@ -895,6 +895,55 @@ func TestRateLimiterIPBlacklistOnlyAppliesToV1(t *testing.T) {
 	}
 }
 
+func TestRateLimiterChecksIPBanLookupWhenRuntimeRulesAreStale(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prev := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Message: "请联系管理员",
+		},
+	})
+	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
+
+	rl := NewRateLimiter(0)
+	var lookups int32
+	rl.SetIPBanLookupCallback(func(ip string) (IPBanRule, bool) {
+		atomic.AddInt32(&lookups, 1)
+		if ip == "203.10.99.27" {
+			return IPBanRule{IP: ip, Reason: "manual", Source: "manual", Enabled: true}, true
+		}
+		return IPBanRule{}, false
+	})
+
+	router := gin.New()
+	router.Use(rl.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	first := httptest.NewRecorder()
+	firstReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	firstReq.RemoteAddr = "203.10.99.27:1234"
+	router.ServeHTTP(first, firstReq)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200; body=%s", first.Code, first.Body.String())
+	}
+	if body := first.Body.String(); !strings.Contains(body, "触发风控已被锁定, 请稍后再试，请联系管理员") {
+		t.Fatalf("first body = %s, want protocol ban message", body)
+	}
+
+	second := httptest.NewRecorder()
+	secondReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	secondReq.RemoteAddr = "203.10.99.27:5678"
+	router.ServeHTTP(second, secondReq)
+	if second.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want 200; body=%s", second.Code, second.Body.String())
+	}
+	if got := atomic.LoadInt32(&lookups); got != 1 {
+		t.Fatalf("lookup calls = %d, want 1", got)
+	}
+}
+
 func TestRateLimiterAutoBansIPAfterRPMLimit(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()

@@ -217,20 +217,19 @@ func main() {
 	if bans, err := db.ListIPBans(context.Background(), false); err == nil {
 		rules := make([]proxy.IPBanRule, 0, len(bans))
 		for _, ban := range bans {
-			expiresAt := time.Time{}
-			if ban.ExpiresAt.Valid {
-				expiresAt = ban.ExpiresAt.Time
-			}
-			rules = append(rules, proxy.IPBanRule{
-				IP:        ban.IP,
-				Reason:    ban.Reason,
-				Source:    ban.Source,
-				ExpiresAt: expiresAt,
-				Enabled:   ban.Enabled && !ban.UnbannedAt.Valid,
-			})
+			rules = append(rules, proxy.IPBanRuleFromDBRow(ban))
 		}
 		rateLimiter.UpdateIPBanRules(rules)
 	}
+	rateLimiter.SetIPBanLookupCallback(func(ip string) (proxy.IPBanRule, bool) {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		row, err := db.GetIPBanByIP(ctx, ip)
+		if err != nil || row == nil || !proxy.IsActiveIPBanRow(*row, time.Now()) {
+			return proxy.IPBanRule{}, false
+		}
+		return proxy.IPBanRuleFromDBRow(*row), true
+	})
 	rateLimiter.SetIPAutoBanCallback(func(ip string, reason string, expiresAt time.Time) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()

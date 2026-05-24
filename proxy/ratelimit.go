@@ -803,6 +803,7 @@ type RateLimiter struct {
 	ipRPMWindows      map[string][]time.Time
 	ipQPSBuckets      map[string]*tokenBucket
 	ipBans            []ipBanEntry
+	ipBanLookupMisses map[string]time.Time
 	ipQPSLimitAtomic  int64
 	ipRPMLimitAtomic  int64
 	ipAutoBanEnabled  atomic.Bool
@@ -810,10 +811,13 @@ type RateLimiter struct {
 	ipAutoBanOnRPM    atomic.Bool
 	ipAutoBanDuration int64
 	ipAutoBanCallback func(ip string, reason string, expiresAt time.Time)
+	ipBanLookup       func(ip string) (IPBanRule, bool)
 	now               func() time.Time
 }
 
 const contextRateLimitClientIP = "rate_limit_client_ip"
+
+const ipBanLookupMissTTL = 2 * time.Second
 
 type IPBanRule struct {
 	IP        string
@@ -902,6 +906,7 @@ func (rl *RateLimiter) UpdateIPBanRules(rules []IPBanRule) {
 	entries := parseIPBanRules(rules)
 	rl.ipMu.Lock()
 	rl.ipBans = entries
+	rl.ipBanLookupMisses = nil
 	rl.ipMu.Unlock()
 }
 
@@ -920,6 +925,12 @@ func (rl *RateLimiter) SetIPAutoBanCallback(callback func(ip string, reason stri
 	rl.ipMu.Lock()
 	defer rl.ipMu.Unlock()
 	rl.ipAutoBanCallback = callback
+}
+
+func (rl *RateLimiter) SetIPBanLookupCallback(callback func(ip string) (IPBanRule, bool)) {
+	rl.ipMu.Lock()
+	defer rl.ipMu.Unlock()
+	rl.ipBanLookup = callback
 }
 
 func (rl *RateLimiter) autoBanIP(ip string, reason string) {
@@ -968,6 +979,7 @@ func (rl *RateLimiter) isIPBanned(ip string) bool {
 	now := time.Now()
 	rl.ipMu.Lock()
 	entries := append([]ipBanEntry(nil), rl.ipBans...)
+	lookup := rl.ipBanLookup
 	rl.ipMu.Unlock()
 	for _, entry := range entries {
 		if !entry.expiresAt.IsZero() && !entry.expiresAt.After(now) {
@@ -977,7 +989,72 @@ func (rl *RateLimiter) isIPBanned(ip string) bool {
 			return true
 		}
 	}
-	return false
+	if lookup == nil {
+		return false
+	}
+	key := addr.String()
+	rl.ipMu.Lock()
+	if rl.ipBanLookupMisses != nil {
+		if nextLookup, ok := rl.ipBanLookupMisses[key]; ok && nextLookup.After(now) {
+			rl.ipMu.Unlock()
+			return false
+		}
+	}
+	rl.ipMu.Unlock()
+	rule, ok := lookup(addr.String())
+	if !ok {
+		rl.ipMu.Lock()
+		if rl.ipBanLookupMisses == nil {
+			rl.ipBanLookupMisses = make(map[string]time.Time)
+		}
+		rl.ipBanLookupMisses[key] = now.Add(ipBanLookupMissTTL)
+		rl.ipMu.Unlock()
+		return false
+	}
+	newEntries := parseIPBanRules([]IPBanRule{rule})
+	if len(newEntries) == 0 {
+		rl.ipMu.Lock()
+		if rl.ipBanLookupMisses == nil {
+			rl.ipBanLookupMisses = make(map[string]time.Time)
+		}
+		rl.ipBanLookupMisses[key] = now.Add(ipBanLookupMissTTL)
+		rl.ipMu.Unlock()
+		return false
+	}
+	rl.ipMu.Lock()
+	rl.ipBans = upsertIPBanEntry(rl.ipBans, newEntries[0])
+	if rl.ipBanLookupMisses != nil {
+		delete(rl.ipBanLookupMisses, key)
+	}
+	rl.ipMu.Unlock()
+	if !newEntries[0].expiresAt.IsZero() && !newEntries[0].expiresAt.After(now) {
+		return false
+	}
+	return newEntries[0].addr.IsValid() && newEntries[0].addr == addr
+}
+
+func IPBanRuleFromDBRow(row database.IPBanRow) IPBanRule {
+	expiresAt := time.Time{}
+	if row.ExpiresAt.Valid {
+		expiresAt = row.ExpiresAt.Time
+	}
+	return IPBanRule{
+		IP:        row.IP,
+		Reason:    row.Reason,
+		Source:    row.Source,
+		ExpiresAt: expiresAt,
+		Enabled:   row.Enabled && !row.UnbannedAt.Valid,
+	}
+}
+
+func IsActiveIPBanRow(row database.IPBanRow, now time.Time) bool {
+	if !row.Enabled || row.UnbannedAt.Valid {
+		return false
+	}
+	if row.ExpiresAt.Valid && !row.ExpiresAt.Time.After(now) {
+		return false
+	}
+	return true
 }
 
 func parseIPBanRules(rules []IPBanRule) []ipBanEntry {
