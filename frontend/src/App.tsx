@@ -15,6 +15,7 @@ const Proxies = lazy(() => import("./pages/Proxies"));
 const SchedulerBoard = lazy(() => import("./pages/SchedulerBoard"));
 const Settings = lazy(() => import("./pages/Settings"));
 const APISecurity = lazy(() => import("./pages/APISecurity"));
+const IPBlacklist = lazy(() => import("./pages/IPBlacklist"));
 const Docs = lazy(() => import("./pages/Docs"));
 const APIKeys = lazy(() => import("./pages/APIKeys"));
 const Usage = lazy(() => import("./pages/Usage"));
@@ -88,6 +89,7 @@ export default function App() {
                 <Route path="/ops/scheduler" element={<SchedulerBoard />} />
                 <Route path="/usage" element={<Usage />} />
                 <Route path="/api-security" element={<APISecurity />} />
+                <Route path="/ip-blacklist" element={<IPBlacklist />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/docs" element={<Docs />} />
                 <Route

@@ -22,6 +22,7 @@ import {
   ShieldAlert,
   ExternalLink,
   ShieldCheck,
+  Ban,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { DEFAULT_SITE_LOGO, useBranding } from "../branding";
@@ -86,6 +87,11 @@ const navDefs: NavDef[] = [
     to: "/api-security",
     labelKey: "nav.apiSecurity",
     icon: <ShieldCheck className="size-[18px]" />,
+  },
+  {
+    to: "/ip-blacklist",
+    labelKey: "nav.ipBlacklist",
+    icon: <Ban className="size-[18px]" />,
   },
   {
     to: "/settings",
