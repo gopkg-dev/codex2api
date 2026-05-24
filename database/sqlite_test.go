@@ -290,8 +290,8 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 		IPRPMLimit:                       7,
 		FilterLocalFallbackResponse:      true,
 		DisableFastServiceTier:           true,
-		DownstreamUsageMultiplierEnabled: true,
 		DownstreamUsageMultiplier:        3.5,
+		ProtocolMessageUsageBlastEnabled: true,
 		APIMaintenanceConfig:             `{"enabled":true,"message":"维护中"}`,
 	}
 
@@ -312,11 +312,11 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	if !got.DisableFastServiceTier {
 		t.Fatal("DisableFastServiceTier = false, want true")
 	}
-	if !got.DownstreamUsageMultiplierEnabled {
-		t.Fatal("DownstreamUsageMultiplierEnabled = false, want true")
-	}
 	if got.DownstreamUsageMultiplier != 3.5 {
 		t.Fatalf("DownstreamUsageMultiplier = %f, want 3.5", got.DownstreamUsageMultiplier)
+	}
+	if !got.ProtocolMessageUsageBlastEnabled {
+		t.Fatal("ProtocolMessageUsageBlastEnabled = false, want true")
 	}
 	if got.APIMaintenanceConfig != `{"enabled":true,"message":"维护中"}` {
 		t.Fatalf("APIMaintenanceConfig = %q", got.APIMaintenanceConfig)
@@ -445,6 +445,41 @@ func TestSQLiteMigratesLegacyIPBlacklistToIPBansAndDropsColumn(t *testing.T) {
 	}
 	if _, ok := columns["ip_blacklist"]; ok {
 		t.Fatal("legacy ip_blacklist column still exists after migration")
+	}
+}
+
+func TestSQLiteDropsLegacyAPIKeyDisabledMessageColumn(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open legacy sqlite 返回错误: %v", err)
+	}
+	_, err = raw.Exec(`
+		CREATE TABLE system_settings (
+			id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			api_key_disabled_message TEXT DEFAULT ''
+		);
+		INSERT INTO system_settings (id, api_key_disabled_message) VALUES (1, '旧提示');
+	`)
+	if closeErr := raw.Close(); closeErr != nil {
+		t.Fatalf("close legacy sqlite 返回错误: %v", closeErr)
+	}
+	if err != nil {
+		t.Fatalf("seed legacy sqlite 返回错误: %v", err)
+	}
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	columns, err := db.sqliteTableColumns(context.Background(), "system_settings")
+	if err != nil {
+		t.Fatalf("sqliteTableColumns 返回错误: %v", err)
+	}
+	if _, ok := columns["api_key_disabled_message"]; ok {
+		t.Fatal("legacy api_key_disabled_message column still exists after migration")
 	}
 }
 

@@ -88,11 +88,12 @@ type APIMaintenanceRouteConfig struct {
 }
 
 type APIMaintenanceConfig struct {
-	Enabled      bool                                 `json:"enabled"`
-	Message      string                               `json:"message"`
-	SSERandomize bool                                 `json:"sse_randomize"`
-	ImageB64JSON string                               `json:"image_b64_json"`
-	Routes       map[string]APIMaintenanceRouteConfig `json:"routes,omitempty"`
+	Enabled          bool                                 `json:"enabled"`
+	RoutesControlled bool                                 `json:"routes_controlled,omitempty"`
+	Message          string                               `json:"message"`
+	SSERandomize     bool                                 `json:"sse_randomize"`
+	ImageB64JSON     string                               `json:"image_b64_json"`
+	Routes           map[string]APIMaintenanceRouteConfig `json:"routes,omitempty"`
 }
 
 type maintenanceResolvedConfig struct {
@@ -103,16 +104,19 @@ type maintenanceResolvedConfig struct {
 
 func DefaultAPIMaintenanceConfig() APIMaintenanceConfig {
 	return APIMaintenanceConfig{
-		Enabled:      false,
-		Message:      defaultMaintenanceMessage,
-		SSERandomize: false,
-		ImageB64JSON: defaultMaintenanceImageB64,
-		Routes:       map[string]APIMaintenanceRouteConfig{},
+		Enabled:          false,
+		RoutesControlled: true,
+		Message:          defaultMaintenanceMessage,
+		SSERandomize:     false,
+		ImageB64JSON:     defaultMaintenanceImageB64,
+		Routes:           defaultMaintenanceRoutes(false),
 	}
 }
 
 func NormalizeAPIMaintenanceConfig(cfg APIMaintenanceConfig) APIMaintenanceConfig {
 	defaults := DefaultAPIMaintenanceConfig()
+	legacyEnabled := cfg.Enabled
+	routesControlled := cfg.RoutesControlled
 	cfg.Message = strings.TrimSpace(cfg.Message)
 	if cfg.Message == "" {
 		cfg.Message = defaults.Message
@@ -124,25 +128,58 @@ func NormalizeAPIMaintenanceConfig(cfg APIMaintenanceConfig) APIMaintenanceConfi
 	if cfg.Routes == nil {
 		cfg.Routes = map[string]APIMaintenanceRouteConfig{}
 	}
-	normalizedRoutes := make(map[string]APIMaintenanceRouteConfig, len(cfg.Routes))
+	normalizedRoutes := make(map[string]APIMaintenanceRouteConfig, len(maintenanceEndpointPaths))
 	for path, route := range cfg.Routes {
 		key := canonicalMaintenancePath(path)
-		if key == "" {
+		if !isMaintenanceEndpoint(key) {
 			continue
 		}
-		route.Message = strings.TrimSpace(route.Message)
+		route.Message = ""
 		route.ImageB64JSON = strings.TrimSpace(route.ImageB64JSON)
 		normalizedRoutes[key] = route
 	}
+	cfg.Enabled = false
+	for _, path := range maintenanceEndpointPaths {
+		route := normalizedRoutes[path]
+		enabled := route.Enabled != nil && *route.Enabled
+		if !routesControlled {
+			enabled = legacyEnabled && (route.Enabled == nil || *route.Enabled)
+		}
+		route.Enabled = boolPointer(enabled)
+		normalizedRoutes[path] = route
+		cfg.Enabled = cfg.Enabled || enabled
+	}
+	cfg.RoutesControlled = true
 	cfg.Routes = normalizedRoutes
 	return cfg
 }
 
-func ParseAPIMaintenanceConfig(raw string) APIMaintenanceConfig {
-	cfg := DefaultAPIMaintenanceConfig()
-	if strings.TrimSpace(raw) == "" {
-		return cfg
+var maintenanceEndpointPaths = []string{
+	"/v1/chat/completions",
+	"/v1/images/edits",
+	"/v1/images/generations",
+	"/v1/messages",
+	"/v1/responses",
+	"/v1/responses/compact",
+}
+
+func defaultMaintenanceRoutes(enabled bool) map[string]APIMaintenanceRouteConfig {
+	routes := make(map[string]APIMaintenanceRouteConfig, len(maintenanceEndpointPaths))
+	for _, path := range maintenanceEndpointPaths {
+		routes[path] = APIMaintenanceRouteConfig{Enabled: boolPointer(enabled)}
 	}
+	return routes
+}
+
+func boolPointer(value bool) *bool {
+	return &value
+}
+
+func ParseAPIMaintenanceConfig(raw string) APIMaintenanceConfig {
+	if strings.TrimSpace(raw) == "" {
+		return DefaultAPIMaintenanceConfig()
+	}
+	var cfg APIMaintenanceConfig
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return DefaultAPIMaintenanceConfig()
 	}
@@ -210,17 +247,10 @@ func shouldApplyMaintenance(method, routePath string, cfg APIMaintenanceConfig) 
 	if strings.ToUpper(strings.TrimSpace(method)) != http.MethodPost {
 		return false
 	}
-	cfg = NormalizeAPIMaintenanceConfig(cfg)
-	if !cfg.Enabled {
-		return false
-	}
 	if !isMaintenanceEndpoint(routePath) {
 		return false
 	}
-	if route, ok := cfg.Routes[routePath]; ok && route.Enabled != nil && !*route.Enabled {
-		return false
-	}
-	return true
+	return maintenanceRouteEnabled(routePath, cfg)
 }
 
 func isMaintenanceEndpoint(routePath string) bool {
@@ -232,22 +262,41 @@ func isMaintenanceEndpoint(routePath string) bool {
 	}
 }
 
+func maintenanceRouteEnabled(routePath string, cfg APIMaintenanceConfig) bool {
+	cfg = NormalizeAPIMaintenanceConfig(cfg)
+	route, ok := cfg.Routes[canonicalMaintenancePath(routePath)]
+	return ok && route.Enabled != nil && *route.Enabled
+}
+
 func resolveMaintenanceConfig(routePath string, cfg APIMaintenanceConfig) maintenanceResolvedConfig {
 	cfg = NormalizeAPIMaintenanceConfig(cfg)
 	resolved := maintenanceResolvedConfig{
-		Message:      cfg.Message,
+		Message:      MaintenanceMessageForPath(routePath, cfg.Message),
 		SSERandomize: cfg.SSERandomize,
 		ImageB64JSON: cfg.ImageB64JSON,
 	}
 	if route, ok := cfg.Routes[routePath]; ok {
-		if strings.TrimSpace(route.Message) != "" {
-			resolved.Message = strings.TrimSpace(route.Message)
-		}
 		if strings.TrimSpace(route.ImageB64JSON) != "" {
 			resolved.ImageB64JSON = strings.TrimSpace(route.ImageB64JSON)
 		}
 	}
 	return resolved
+}
+
+// MaintenanceMessageForPath prefixes the global maintenance text with its public service name.
+func MaintenanceMessageForPath(routePath, message string) string {
+	var prefix string
+	switch canonicalMaintenancePath(routePath) {
+	case "/v1/chat/completions":
+		prefix = "OpenAI Chat 接口未开启"
+	case "/v1/images/edits", "/v1/images/generations":
+		prefix = "GPT生图 接口未开启"
+	case "/v1/messages":
+		prefix = "Claude 接口未开启"
+	case "/v1/responses", "/v1/responses/compact":
+		prefix = "Codex 接口未开启"
+	}
+	return prefixedRuntimeMessage(prefix, message)
 }
 
 func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bool, cfg maintenanceResolvedConfig) {
@@ -275,7 +324,7 @@ func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bo
 			"created": time.Now().Unix(),
 			"data": []gin.H{{
 				"b64_json":       cfg.ImageB64JSON,
-				"revised_prompt": "",
+				"revised_prompt": cfg.Message,
 			}},
 		})
 	default:
@@ -284,7 +333,7 @@ func writeMaintenanceResponse(c *gin.Context, routePath, model string, stream bo
 }
 
 func writeDisabledAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
-	return writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已被禁用", settings.APIKeyDisabledMessage), settings)
+	return writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已被禁用", runtimeMaintenanceMessage(settings)), settings)
 }
 
 func writeProtocolMessageStreamResponse(c *gin.Context, message string, settings RuntimeSettings) bool {
@@ -401,9 +450,10 @@ func writeMaintenanceChatStream(c *gin.Context, model string, cfg maintenanceRes
 	c.Header("Connection", "keep-alive")
 	id := maintenanceHexID("chatcmpl_")
 	created := time.Now().Unix()
-	usage := newMaintenanceUsage()
+	segments := maintenanceStreamSegments(cfg.Message, cfg.SSERandomize)
+	usage := newMaintenanceUsage(strings.Join(segments, ""))
 	writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{"role": "assistant"}, "finish_reason": nil}}})
-	for _, segment := range maintenanceStreamSegments(cfg.Message, cfg.SSERandomize) {
+	for _, segment := range segments {
 		writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{"content": segment}, "finish_reason": nil}}})
 	}
 	writeSSEData(c, gin.H{"id": id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": []gin.H{{"index": 0, "delta": gin.H{}, "finish_reason": "stop"}}, "usage": usage.chat()})
@@ -419,7 +469,8 @@ func writeMaintenanceResponsesStream(c *gin.Context, model string, cfg maintenan
 	itemID := maintenanceHexID("msg_")
 	created := time.Now().Unix()
 	sequenceNumber := 0
-	usage := newMaintenanceUsage()
+	segments := maintenanceStreamSegments(cfg.Message, cfg.SSERandomize)
+	usage := newMaintenanceUsage(strings.Join(segments, ""))
 	inProgress := buildMaintenanceStreamResponseObject(responseID, model, created, "in_progress", nil, nil)
 	writeNamedSSE(c, "response.created", gin.H{"type": "response.created", "response": inProgress, "sequence_number": sequenceNumber})
 	sequenceNumber++
@@ -441,7 +492,7 @@ func writeMaintenanceResponsesStream(c *gin.Context, model string, cfg maintenan
 		"sequence_number": sequenceNumber,
 	})
 	sequenceNumber++
-	for _, segment := range maintenanceStreamSegments(cfg.Message, cfg.SSERandomize) {
+	for _, segment := range segments {
 		writeNamedSSE(c, "response.output_text.delta", gin.H{
 			"type":            "response.output_text.delta",
 			"content_index":   0,
@@ -492,10 +543,11 @@ func writeMaintenanceMessagesStream(c *gin.Context, model string, cfg maintenanc
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	messageID := maintenanceHexID("msg_")
-	usage := newMaintenanceUsage()
+	segments := maintenanceStreamSegments(cfg.Message, cfg.SSERandomize)
+	usage := newMaintenanceUsage(strings.Join(segments, ""))
 	writeNamedSSE(c, "message_start", gin.H{"type": "message_start", "message": gin.H{"id": messageID, "type": "message", "role": "assistant", "model": model, "content": []any{}, "stop_reason": nil, "usage": usage.messagesStart()}})
 	writeNamedSSE(c, "content_block_start", gin.H{"type": "content_block_start", "index": 0, "content_block": gin.H{"type": "text", "text": ""}})
-	for _, segment := range maintenanceStreamSegments(cfg.Message, cfg.SSERandomize) {
+	for _, segment := range segments {
 		writeNamedSSE(c, "content_block_delta", gin.H{"type": "content_block_delta", "index": 0, "delta": gin.H{"type": "text_delta", "text": segment}})
 	}
 	writeNamedSSE(c, "content_block_stop", gin.H{"type": "content_block_stop", "index": 0})
@@ -589,24 +641,9 @@ type maintenanceUsage struct {
 	reasoning int
 }
 
-func newMaintenanceUsage() maintenanceUsage {
-	return scaleMaintenanceUsageForDownstream(maintenanceUsageWithRand(newMaintenanceRand()), CurrentRuntimeSettings())
-}
-
-func maintenanceUsageWithRand(rng *mrand.Rand) maintenanceUsage {
-	if rng == nil {
-		rng = newMaintenanceRand()
-	}
-	input := 800000 + rng.Intn(200001)  // 800,000 ~ 1,000,000
-	output := 200000 + rng.Intn(100001) // 200,000 ~ 300,000
-	cached := 100000 + rng.Intn(max(1, input/2-99999))
-	reasoning := 20000 + rng.Intn(max(1, output/2-19999))
-	return maintenanceUsage{
-		input:     input,
-		cached:    min(cached, input),
-		output:    output,
-		reasoning: min(reasoning, output),
-	}
+func newMaintenanceUsage(message string) maintenanceUsage {
+	output := max(1, len([]rune(strings.TrimSpace(message))))
+	return scaleProtocolMessageUsageForDownstream(maintenanceUsage{output: output}, CurrentRuntimeSettings())
 }
 
 func (u maintenanceUsage) total() int {
@@ -639,7 +676,7 @@ func maintenanceStreamUsage(status string, usage *maintenanceUsage) any {
 		return nil
 	}
 	if usage == nil {
-		generated := newMaintenanceUsage()
+		generated := newMaintenanceUsage("")
 		usage = &generated
 	}
 	return gin.H{

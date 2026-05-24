@@ -357,12 +357,10 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		"ip_auto_ban_duration_minutes": 45,
 		"filter_local_fallback_response": false,
 		"disable_fast_service_tier": true,
-		"api_key_disabled_message": "这个 API Key 已暂停使用",
-		"api_maintenance_enabled": true,
 		"api_maintenance_message": "维护中",
 		"api_maintenance_sse_randomize": true,
 		"api_maintenance_image_b64_json": "abc",
-		"api_maintenance_routes_json": "{\"/v1/responses\":{\"enabled\":true,\"message\":\"Responses 维护\"}}"
+		"api_maintenance_routes_json": "{\"/v1/responses\":{\"enabled\":true}}"
 	}`
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
@@ -384,10 +382,10 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if !payload.DisableFastServiceTier {
 		t.Fatal("DisableFastServiceTier = false, want true")
 	}
-	if payload.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
-		t.Fatalf("APIKeyDisabledMessage = %q, want custom message", payload.APIKeyDisabledMessage)
+	if strings.Contains(recorder.Body.String(), `"api_key_disabled_message"`) {
+		t.Fatalf("response still exposes api_key_disabled_message: %s", recorder.Body.String())
 	}
-	if !payload.APIMaintenanceEnabled || payload.APIMaintenanceMessage != "维护中" || !payload.APIMaintenanceSSERandomize {
+	if payload.APIMaintenanceMessage != "维护中" || !payload.APIMaintenanceSSERandomize {
 		t.Fatalf("maintenance response = %#v", payload)
 	}
 	if payload.IPQPSLimit != 4 {
@@ -409,9 +407,6 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	}
 	if !gotSettings.DisableFastServiceTier {
 		t.Fatal("persisted DisableFastServiceTier = false, want true")
-	}
-	if gotSettings.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
-		t.Fatalf("persisted APIKeyDisabledMessage = %q, want custom message", gotSettings.APIKeyDisabledMessage)
 	}
 	if gotSettings.IPQPSLimit != 4 {
 		t.Fatalf("persisted IPQPSLimit = %d, want 4", gotSettings.IPQPSLimit)
@@ -435,10 +430,8 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if !runtimeCfg.DisableFastServiceTier {
 		t.Fatal("runtime DisableFastServiceTier = false, want true")
 	}
-	if runtimeCfg.APIKeyDisabledMessage != "这个 API Key 已暂停使用" {
-		t.Fatalf("runtime APIKeyDisabledMessage = %q, want custom message", runtimeCfg.APIKeyDisabledMessage)
-	}
-	if !runtimeCfg.APIMaintenance.Enabled || runtimeCfg.APIMaintenance.Message != "维护中" {
+	route := runtimeCfg.APIMaintenance.Routes["/v1/responses"]
+	if route.Enabled == nil || !*route.Enabled || runtimeCfg.APIMaintenance.Message != "维护中" {
 		t.Fatalf("runtime maintenance = %#v", runtimeCfg.APIMaintenance)
 	}
 }

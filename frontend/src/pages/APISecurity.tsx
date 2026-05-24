@@ -45,10 +45,8 @@ type SecurityForm = Pick<
   | "ip_auto_ban_on_rpm"
   | "filter_local_fallback_response"
   | "disable_fast_service_tier"
-  | "downstream_usage_multiplier_enabled"
   | "downstream_usage_multiplier"
-  | "api_key_disabled_message"
-  | "api_maintenance_enabled"
+  | "protocol_message_usage_blast_enabled"
   | "api_maintenance_message"
   | "api_maintenance_sse_randomize"
   | "api_maintenance_image_b64_json"
@@ -65,10 +63,8 @@ const defaultForm: SecurityForm = {
   ip_auto_ban_on_rpm: true,
   filter_local_fallback_response: true,
   disable_fast_service_tier: false,
-  downstream_usage_multiplier_enabled: false,
   downstream_usage_multiplier: 1,
-  api_key_disabled_message: "API Key 已被禁用，请联系管理员。",
-  api_maintenance_enabled: false,
+  protocol_message_usage_blast_enabled: false,
   api_maintenance_message: "系统维护中，请稍后重试。",
   api_maintenance_sse_randomize: false,
   api_maintenance_image_b64_json: "",
@@ -201,11 +197,9 @@ export default function APISecurity() {
         ip_auto_ban_on_rpm: settings.ip_auto_ban_on_rpm,
         filter_local_fallback_response: settings.filter_local_fallback_response,
         disable_fast_service_tier: settings.disable_fast_service_tier,
-        downstream_usage_multiplier_enabled:
-          settings.downstream_usage_multiplier_enabled,
         downstream_usage_multiplier: settings.downstream_usage_multiplier,
-        api_key_disabled_message: settings.api_key_disabled_message,
-        api_maintenance_enabled: settings.api_maintenance_enabled,
+        protocol_message_usage_blast_enabled:
+          settings.protocol_message_usage_blast_enabled,
         api_maintenance_message: settings.api_maintenance_message,
         api_maintenance_sse_randomize: settings.api_maintenance_sse_randomize,
         api_maintenance_image_b64_json: settings.api_maintenance_image_b64_json,
@@ -236,9 +230,9 @@ export default function APISecurity() {
         ip_auto_ban_on_qps: updated.ip_auto_ban_on_qps,
         ip_auto_ban_on_rpm: updated.ip_auto_ban_on_rpm,
         disable_fast_service_tier: updated.disable_fast_service_tier,
-        downstream_usage_multiplier_enabled:
-          updated.downstream_usage_multiplier_enabled,
         downstream_usage_multiplier: updated.downstream_usage_multiplier,
+        protocol_message_usage_blast_enabled:
+          updated.protocol_message_usage_blast_enabled,
       }));
       showToast("API 防护设置已保存");
     } catch (error) {
@@ -307,7 +301,7 @@ export default function APISecurity() {
       <ToastNotice toast={toast} />
       <PageHeader
         title="API 防护"
-        description="管理 /v1 流量限制、IP 智能封禁策略、API Key 禁用文案和端点维护响应。"
+        description="管理 /v1 流量限制、IP 智能封禁策略和端点维护响应。"
         onRefresh={() => void reload()}
         actions={
           <Button onClick={() => void save()} disabled={saving}>
@@ -439,7 +433,7 @@ export default function APISecurity() {
       <div className="mt-4">
         <SecurityCard
           title="API 安全与维护"
-          description="管理 API Key 禁用文案、本地回退过滤和维护模式响应。"
+          description="管理本地回退过滤、用量响应和维护提示内容。"
         >
           <div className="grid gap-5 xl:grid-cols-[minmax(520px,1fr)_320px]">
             <div className="space-y-4">
@@ -481,26 +475,13 @@ export default function APISecurity() {
                 />
               </div>
               <div className="rounded-lg border border-border p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-semibold">
-                      下游 cached_tokens 倍数
-                    </div>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      只调整返回给下游的缓存命中用量，输入、输出、推理和
-                      total 保持原值。
-                    </p>
+                <div>
+                  <div className="text-sm font-semibold">
+                    下游 cached_tokens 倍数
                   </div>
-                  <ToggleSwitch
-                    checked={form.downstream_usage_multiplier_enabled}
-                    onChange={(checked) =>
-                      setForm((f) => ({
-                        ...f,
-                        downstream_usage_multiplier_enabled: checked,
-                      }))
-                    }
-                    label="下游 cached_tokens 倍数"
-                  />
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    调整真实上游响应返回给下游的缓存命中用量，默认 1 倍。
+                  </p>
                 </div>
                 <div className="mt-3 max-w-xs">
                   <Field label="倍数">
@@ -521,21 +502,24 @@ export default function APISecurity() {
                     />
                   </Field>
                 </div>
-              </div>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="text-sm font-semibold">API 维护模式</div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    生成类 POST 接口返回协议兼容的维护响应。
-                  </p>
+                <div className="mt-4 flex items-start justify-between gap-4 border-t border-border pt-4">
+                  <div>
+                    <div className="text-sm font-semibold">搞爆下游上下文</div>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      将维护、密钥和风控提示响应的 usage 放大 99999 倍。
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={form.protocol_message_usage_blast_enabled}
+                    onChange={(checked) =>
+                      setForm((f) => ({
+                        ...f,
+                        protocol_message_usage_blast_enabled: checked,
+                      }))
+                    }
+                    label="搞爆下游上下文"
+                  />
                 </div>
-                <ToggleSwitch
-                  checked={form.api_maintenance_enabled}
-                  onChange={(checked) =>
-                    setForm((f) => ({ ...f, api_maintenance_enabled: checked }))
-                  }
-                  label="API 维护模式"
-                />
               </div>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -556,19 +540,10 @@ export default function APISecurity() {
                   label="随机扰动 SSE 文本"
                 />
               </div>
-              <Field label="API Key 禁用文案">
-                <textarea
-                  className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-3 text-sm leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={form.api_key_disabled_message}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      api_key_disabled_message: e.target.value,
-                    }))
-                  }
-                />
-              </Field>
-              <Field label="默认维护文案">
+              <Field
+                label="默认维护文案"
+                description="追加到维护、密钥不可用、限流与自动封禁的协议提示中。"
+              >
                 <textarea
                   className="min-h-20 w-full rounded-md border border-input bg-background px-3 py-3 text-sm leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   value={form.api_maintenance_message}
@@ -646,7 +621,7 @@ export default function APISecurity() {
             <div className="grid gap-3 xl:grid-cols-2">
               {MAINTENANCE_ROUTE_GROUPS.map((group) => {
                 const route = getMaintenanceGroupConfig(routes, group);
-                const enabled = route.enabled !== false;
+                const enabled = route.enabled === true;
                 return (
                   <div
                     key={group.key}
@@ -668,19 +643,17 @@ export default function APISecurity() {
                         checked={enabled}
                         onChange={(checked) =>
                           updateRouteGroup(group.key, {
-                            enabled: checked ? undefined : false,
+                            enabled: checked,
                           })
                         }
                         label={group.label}
                       />
                     </div>
-                    <Input
-                      value={route.message ?? ""}
-                      placeholder="留空使用全局维护内容"
-                      onChange={(e) =>
-                        updateRouteGroup(group.key, { message: e.target.value })
-                      }
-                    />
+                    <p className="text-xs leading-relaxed text-muted-foreground">
+                      返回文案：{group.messagePrefix}，
+                      {form.api_maintenance_message.trim() ||
+                        "系统维护中，请稍后重试。"}
+                    </p>
                   </div>
                 );
               })}

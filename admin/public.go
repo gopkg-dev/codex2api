@@ -68,6 +68,10 @@ func (h *Handler) GetPublicHome(c *gin.Context) {
 
 	maintenance := proxy.CurrentRuntimeSettings().APIMaintenance
 	maintenanceRoutes := buildPublicMaintenanceRoutes(maintenance)
+	maintenanceEnabled := false
+	for _, route := range maintenanceRoutes {
+		maintenanceEnabled = maintenanceEnabled || route.Maintenance
+	}
 	latestKey, err := h.getLatestPublicAPIKey(ctx)
 	if err != nil {
 		writeInternalError(c, err)
@@ -81,7 +85,7 @@ func (h *Handler) GetPublicHome(c *gin.Context) {
 		AccountPool: buildPublicAccountPool(h.store.Accounts()),
 		LatestKey:   latestKey,
 		Maintenance: publicMaintenanceResponse{
-			Enabled:     maintenance.Enabled,
+			Enabled:     maintenanceEnabled,
 			Message:     maintenance.Message,
 			RoutesCount: len(maintenanceRoutes),
 			Routes:      maintenanceRoutes,
@@ -173,13 +177,11 @@ func buildPublicMaintenanceRoutes(maintenance proxy.APIMaintenanceConfig) []publ
 
 	routes := make([]publicMaintenanceRouteResponse, 0, len(publicMaintenancePaths))
 	for _, path := range publicMaintenancePaths {
-		route, ok := maintenance.Routes[path]
-		routeInMaintenance := maintenance.Enabled && !(ok && route.Enabled != nil && !*route.Enabled)
-		message := maintenance.Message
+		route := maintenance.Routes[path]
+		routeInMaintenance := route.Enabled != nil && *route.Enabled
+		message := proxy.MaintenanceMessageForPath(path, maintenance.Message)
 		if !routeInMaintenance {
 			message = ""
-		} else if ok && strings.TrimSpace(route.Message) != "" {
-			message = strings.TrimSpace(route.Message)
 		}
 		routes = append(routes, publicMaintenanceRouteResponse{
 			Path:        path,

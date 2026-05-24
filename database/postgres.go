@@ -618,9 +618,8 @@ func (db *DB) migrate(ctx context.Context) error {
 			recovery_probe_interval_minutes INT DEFAULT 30,
 			scheduler_mode VARCHAR(20) DEFAULT 'round_robin',
 			disable_fast_service_tier BOOLEAN DEFAULT FALSE,
-			downstream_usage_multiplier_enabled BOOLEAN DEFAULT FALSE,
 			downstream_usage_multiplier DOUBLE PRECISION DEFAULT 1,
-			api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。'
+			protocol_message_usage_blast_enabled BOOLEAN DEFAULT FALSE
 		);
 	CREATE TABLE IF NOT EXISTS account_model_cooldowns (
 		account_id BIGINT NOT NULL,
@@ -682,9 +681,10 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS image_storage_config TEXT DEFAULT '{}';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS filter_local_fallback_response BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS disable_fast_service_tier BOOLEAN DEFAULT FALSE;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS downstream_usage_multiplier_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS downstream_usage_multiplier DOUBLE PRECISION DEFAULT 1;
-	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。';
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS protocol_message_usage_blast_enabled BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS downstream_usage_multiplier_enabled;
+	ALTER TABLE system_settings DROP COLUMN IF EXISTS api_key_disabled_message;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS api_maintenance_config TEXT DEFAULT '{}';
 	UPDATE system_settings
 	SET ip_qps_limit = COALESCE(NULLIF(ip_qps_limit, 0), ip_concurrency_limit, 0)
@@ -1261,9 +1261,8 @@ type SystemSettings struct {
 	ImageStorageConfig               string // JSON: {"backend":"s3","endpoint":"...","region":"...","bucket":"...","access_key":"...","secret_key":"...","prefix":"...","force_path_style":false}
 	FilterLocalFallbackResponse      bool
 	DisableFastServiceTier           bool
-	DownstreamUsageMultiplierEnabled bool
 	DownstreamUsageMultiplier        float64
-	APIKeyDisabledMessage            string
+	ProtocolMessageUsageBlastEnabled bool
 	APIMaintenanceConfig             string // JSON: {"enabled":false,"message":"...","routes":{...}}
 }
 
@@ -1312,9 +1311,8 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(image_storage_config, '{}'),
 		       COALESCE(filter_local_fallback_response, true),
 		       COALESCE(disable_fast_service_tier, false),
-		       COALESCE(downstream_usage_multiplier_enabled, false),
 		       COALESCE(downstream_usage_multiplier, 1),
-		       COALESCE(api_key_disabled_message, 'API Key 已被禁用，请联系管理员。'),
+		       COALESCE(protocol_message_usage_blast_enabled, false),
 		       COALESCE(api_maintenance_config, '{}')
 		FROM system_settings WHERE id = 1
 	`).Scan(
@@ -1335,8 +1333,8 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.ClientCompatMode, &s.CodexMinCLIVersion, &s.UsageLogMode, &s.UsageLogBatchSize,
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
 		&s.ImageStorageConfig, &s.FilterLocalFallbackResponse, &s.DisableFastServiceTier,
-		&s.DownstreamUsageMultiplierEnabled, &s.DownstreamUsageMultiplier,
-		&s.APIKeyDisabledMessage, &s.APIMaintenanceConfig,
+		&s.DownstreamUsageMultiplier, &s.ProtocolMessageUsageBlastEnabled,
+		&s.APIMaintenanceConfig,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -1346,7 +1344,6 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 	if s.IPAutoBanDurationMinutes <= 0 {
 		s.IPAutoBanDurationMinutes = 30
 	}
-	s.APIKeyDisabledMessage = strings.TrimSpace(s.APIKeyDisabledMessage)
 	return s, err
 }
 
@@ -1365,10 +1362,10 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
 				image_storage_config, scheduler_mode, filter_local_fallback_response, disable_fast_service_tier,
-				downstream_usage_multiplier_enabled, downstream_usage_multiplier, api_key_disabled_message, api_maintenance_config,
+				downstream_usage_multiplier, protocol_message_usage_blast_enabled, api_maintenance_config,
 				affinity_mode
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58, $59)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56, $57, $58)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1424,9 +1421,8 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				scheduler_mode = EXCLUDED.scheduler_mode,
 				filter_local_fallback_response = EXCLUDED.filter_local_fallback_response,
 				disable_fast_service_tier = EXCLUDED.disable_fast_service_tier,
-				downstream_usage_multiplier_enabled = EXCLUDED.downstream_usage_multiplier_enabled,
 				downstream_usage_multiplier = EXCLUDED.downstream_usage_multiplier,
-				api_key_disabled_message = EXCLUDED.api_key_disabled_message,
+				protocol_message_usage_blast_enabled = EXCLUDED.protocol_message_usage_blast_enabled,
 				api_maintenance_config = EXCLUDED.api_maintenance_config,
 				affinity_mode = EXCLUDED.affinity_mode
 		`, NormalizeSiteName(s.SiteName), strings.TrimSpace(s.SiteLogo),
@@ -1441,7 +1437,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
 		s.ImageStorageConfig, s.SchedulerMode, s.FilterLocalFallbackResponse, s.DisableFastServiceTier,
-		s.DownstreamUsageMultiplierEnabled, s.DownstreamUsageMultiplier, strings.TrimSpace(s.APIKeyDisabledMessage), s.APIMaintenanceConfig,
+		s.DownstreamUsageMultiplier, s.ProtocolMessageUsageBlastEnabled, s.APIMaintenanceConfig,
 		normalizeAffinityMode(s.AffinityMode))
 	if err != nil {
 		return err

@@ -1,26 +1,38 @@
 export type MaintenanceRouteConfig = {
   enabled?: boolean;
-  message?: string;
   image_b64_json?: string;
 };
 
 export type MaintenanceRouteGroup = {
   key: string;
   label: string;
+  messagePrefix: string;
   paths: string[];
 };
 
 export const MAINTENANCE_ROUTE_GROUPS: MaintenanceRouteGroup[] = [
-  { key: "openai-chat", label: "OpenAI Chat", paths: ["/v1/chat/completions"] },
+  {
+    key: "openai-chat",
+    label: "OpenAI Chat",
+    messagePrefix: "OpenAI Chat 接口未开启",
+    paths: ["/v1/chat/completions"],
+  },
   {
     key: "gpt-image",
     label: "GPT生图",
+    messagePrefix: "GPT生图 接口未开启",
     paths: ["/v1/images/edits", "/v1/images/generations"],
   },
-  { key: "claude", label: "Claude", paths: ["/v1/messages"] },
+  {
+    key: "claude",
+    label: "Claude",
+    messagePrefix: "Claude 接口未开启",
+    paths: ["/v1/messages"],
+  },
   {
     key: "codex",
     label: "Codex",
+    messagePrefix: "Codex 接口未开启",
     paths: ["/v1/responses", "/v1/responses/compact"],
   },
 ];
@@ -65,7 +77,6 @@ export function parseMaintenanceRoutesJSON(
       const item = raw as Record<string, unknown>;
       result[path] = {
         enabled: typeof item.enabled === "boolean" ? item.enabled : undefined,
-        message: typeof item.message === "string" ? item.message : "",
         image_b64_json:
           typeof item.image_b64_json === "string" ? item.image_b64_json : "",
       };
@@ -83,13 +94,11 @@ export function stringifyMaintenanceRoutes(
   for (const path of MAINTENANCE_ROUTE_PATHS) {
     const route = routes[path];
     if (!route) continue;
-    const message = route.message?.trim() ?? "";
     const imageB64JSON = route.image_b64_json?.trim() ?? "";
     const enabled = route.enabled;
-    if (enabled === false || message || imageB64JSON) {
+    if (typeof enabled === "boolean" || imageB64JSON) {
       result[path] = {
-        ...(enabled === false ? { enabled: false } : {}),
-        ...(message ? { message } : {}),
+        ...(typeof enabled === "boolean" ? { enabled } : {}),
         ...(imageB64JSON ? { image_b64_json: imageB64JSON } : {}),
       };
     }

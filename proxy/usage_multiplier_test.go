@@ -6,16 +6,15 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func TestScaleDownstreamUsageJSONKeepsOriginalBodyWhenDisabled(t *testing.T) {
+func TestScaleDownstreamUsageJSONKeepsOriginalBodyAtDefaultMultiplier(t *testing.T) {
 	raw := []byte(`{"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}`)
 
 	got := scaleDownstreamUsageJSON(raw, RuntimeSettings{
-		DownstreamUsageMultiplierEnabled: false,
-		DownstreamUsageMultiplier:        3,
+		DownstreamUsageMultiplier: 1,
 	})
 
 	if string(got) != string(raw) {
-		t.Fatalf("disabled multiplier should keep body, got %s", got)
+		t.Fatalf("default multiplier should keep body, got %s", got)
 	}
 }
 
@@ -23,8 +22,7 @@ func TestScaleDownstreamUsageJSONOnlyScalesCachedTokens(t *testing.T) {
 	raw := []byte(`{"type":"response.completed","response":{"usage":{"input_tokens":100,"input_tokens_details":{"cached_tokens":40},"output_tokens":20,"output_tokens_details":{"reasoning_tokens":8},"total_tokens":120}}}`)
 
 	got := scaleDownstreamUsageJSON(raw, RuntimeSettings{
-		DownstreamUsageMultiplierEnabled: true,
-		DownstreamUsageMultiplier:        2.5,
+		DownstreamUsageMultiplier: 2.5,
 	})
 
 	if value := gjson.GetBytes(got, "response.usage.input_tokens").Int(); value != 100 {
@@ -47,8 +45,7 @@ func TestScaleDownstreamUsageJSONOnlyScalesCachedTokens(t *testing.T) {
 func TestBuildCompactResponseOnlyScalesCachedUsageWithoutMutatingLogUsage(t *testing.T) {
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		DownstreamUsageMultiplierEnabled: true,
-		DownstreamUsageMultiplier:        2,
+		DownstreamUsageMultiplier: 2,
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -72,8 +69,7 @@ func TestScaleAnthropicUsageForDownstreamOnlyScalesCacheRead(t *testing.T) {
 		OutputTokens:         20,
 		CacheReadInputTokens: 40,
 	}, RuntimeSettings{
-		DownstreamUsageMultiplierEnabled: true,
-		DownstreamUsageMultiplier:        3,
+		DownstreamUsageMultiplier: 3,
 	})
 
 	if got.InputTokens != 100 || got.OutputTokens != 20 {

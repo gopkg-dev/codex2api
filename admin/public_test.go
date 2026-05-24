@@ -100,8 +100,8 @@ func TestPublicHomeOverviewIsRegisteredWithoutAdminAuth(t *testing.T) {
 			if !route.Maintenance {
 				t.Fatalf("responses route maintenance = false, want true")
 			}
-			if route.Message != "Responses 维护" {
-				t.Fatalf("responses message = %q, want Responses 维护", route.Message)
+			if route.Message != "Codex 接口未开启，维护中" {
+				t.Fatalf("responses message = %q, want prefixed global message", route.Message)
 			}
 		}
 	}
@@ -175,6 +175,31 @@ func TestBuildPublicMaintenanceRoutesReturnsAvailableRoutesWhenDisabled(t *testi
 		}
 		if route.Message != "" {
 			t.Fatalf("route %s message = %q, want empty", route.Path, route.Message)
+		}
+	}
+}
+
+func TestBuildPublicMaintenanceRoutesReflectsPerServiceSwitches(t *testing.T) {
+	enabled := true
+	disabled := false
+	routes := buildPublicMaintenanceRoutes(proxy.APIMaintenanceConfig{
+		RoutesControlled: true,
+		Message:          "维护",
+		Routes: map[string]proxy.APIMaintenanceRouteConfig{
+			"/v1/responses": {Enabled: &enabled},
+			"/v1/messages":  {Enabled: &disabled},
+		},
+	})
+	for _, route := range routes {
+		switch route.Path {
+		case "/v1/responses":
+			if !route.Maintenance || route.Message != "Codex 接口未开启，维护" {
+				t.Fatalf("responses route = %#v", route)
+			}
+		case "/v1/messages":
+			if route.Maintenance || route.Message != "" {
+				t.Fatalf("messages route = %#v", route)
+			}
 		}
 	}
 }

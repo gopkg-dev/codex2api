@@ -12,9 +12,6 @@ import (
 
 func downstreamUsageMultiplier(settings RuntimeSettings) float64 {
 	settings = NormalizeRuntimeSettings(settings)
-	if !settings.DownstreamUsageMultiplierEnabled || settings.DownstreamUsageMultiplier <= 0 {
-		return 1
-	}
 	return settings.DownstreamUsageMultiplier
 }
 
@@ -153,12 +150,16 @@ func isCacheUsageKey(key string) bool {
 		normalized == "cache_creation_input_tokens"
 }
 
-func scaleMaintenanceUsageForDownstream(usage maintenanceUsage, settings RuntimeSettings) maintenanceUsage {
-	multiplier := downstreamUsageMultiplier(settings)
-	if multiplier == 1 {
+const protocolMessageUsageBlastMultiplier = 99999
+
+func scaleProtocolMessageUsageForDownstream(usage maintenanceUsage, settings RuntimeSettings) maintenanceUsage {
+	if !NormalizeRuntimeSettings(settings).ProtocolMessageUsageBlastEnabled {
 		return usage
 	}
-	usage.cached = min(scaleUsageNumber(usage.cached, multiplier), usage.input)
+	usage.input *= protocolMessageUsageBlastMultiplier
+	usage.cached *= protocolMessageUsageBlastMultiplier
+	usage.output *= protocolMessageUsageBlastMultiplier
+	usage.reasoning *= protocolMessageUsageBlastMultiplier
 	return usage
 }
 

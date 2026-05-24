@@ -153,9 +153,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 				scheduler_mode TEXT DEFAULT 'round_robin',
 				filter_local_fallback_response INTEGER DEFAULT 1,
 				disable_fast_service_tier INTEGER DEFAULT 0,
-				downstream_usage_multiplier_enabled INTEGER DEFAULT 0,
 				downstream_usage_multiplier REAL DEFAULT 1,
-				api_key_disabled_message TEXT DEFAULT 'API Key 已被禁用，请联系管理员。',
+				protocol_message_usage_blast_enabled INTEGER DEFAULT 0,
 				api_maintenance_config TEXT DEFAULT '{}',
 				affinity_mode TEXT DEFAULT 'bounded'
 			);`,
@@ -375,9 +374,8 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 		{"system_settings", "scheduler_mode", "TEXT DEFAULT 'round_robin'"},
 		{"system_settings", "filter_local_fallback_response", "INTEGER DEFAULT 1"},
 		{"system_settings", "disable_fast_service_tier", "INTEGER DEFAULT 0"},
-		{"system_settings", "downstream_usage_multiplier_enabled", "INTEGER DEFAULT 0"},
 		{"system_settings", "downstream_usage_multiplier", "REAL DEFAULT 1"},
-		{"system_settings", "api_key_disabled_message", "TEXT DEFAULT 'API Key 已被禁用，请联系管理员。'"},
+		{"system_settings", "protocol_message_usage_blast_enabled", "INTEGER DEFAULT 0"},
 		{"system_settings", "api_maintenance_config", "TEXT DEFAULT '{}'"},
 		{"system_settings", "affinity_mode", "TEXT DEFAULT 'bounded'"},
 		{"accounts", "enabled", "INTEGER DEFAULT 1"},
@@ -413,6 +411,16 @@ func (db *DB) migrateSQLite(ctx context.Context) error {
 			return err
 		}
 		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN ip_concurrency_limit`); err != nil {
+			return err
+		}
+	}
+	if _, ok := systemColumns["downstream_usage_multiplier_enabled"]; ok {
+		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN downstream_usage_multiplier_enabled`); err != nil {
+			return err
+		}
+	}
+	if _, ok := systemColumns["api_key_disabled_message"]; ok {
+		if _, err := db.conn.ExecContext(ctx, `ALTER TABLE system_settings DROP COLUMN api_key_disabled_message`); err != nil {
 			return err
 		}
 	}

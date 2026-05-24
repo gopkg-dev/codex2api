@@ -972,7 +972,7 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAPIKey, settings.APIKeyDisabledMessage, api.ErrorTypeAuthentication))
+			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAPIKey, prefixedRuntimeMessage("密匙不存在", runtimeMaintenanceMessage(settings)), api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
@@ -983,7 +983,8 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-			api.SendError(c, api.NewAPIError(api.ErrCodeDisabledAPIKey, CurrentRuntimeSettings().APIKeyDisabledMessage, api.ErrorTypeAuthentication))
+			settings := CurrentRuntimeSettings()
+			api.SendError(c, api.NewAPIError(api.ErrCodeDisabledAPIKey, prefixedRuntimeMessage("密匙已被禁用", runtimeMaintenanceMessage(settings)), api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
@@ -991,11 +992,11 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 			maskedKey := security.MaskAPIKey(key)
 			security.SecurityAuditLog("AUTH_FAILED_EXPIRED_KEY", fmt.Sprintf("path=%s ip=%s key=%s", c.Request.URL.Path, c.ClientIP(), maskedKey))
 			settings := CurrentRuntimeSettings()
-			if writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已过期", settings.APIKeyDisabledMessage), settings) {
+			if writeProtocolMessageStreamResponse(c, prefixedRuntimeMessage("密匙已过期", runtimeMaintenanceMessage(settings)), settings) {
 				c.Abort()
 				return
 			}
-			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAuth, settings.APIKeyDisabledMessage, api.ErrorTypeAuthentication))
+			api.SendError(c, api.NewAPIError(api.ErrCodeInvalidAuth, prefixedRuntimeMessage("密匙已过期", runtimeMaintenanceMessage(settings)), api.ErrorTypeAuthentication))
 			c.Abort()
 			return
 		}
@@ -1016,7 +1017,7 @@ func (h *Handler) authMiddleware() gin.HandlerFunc {
 }
 
 func writeInvalidAPIKeyProtocolResponse(c *gin.Context, settings RuntimeSettings) bool {
-	return writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙不存在", settings.APIKeyDisabledMessage), settings)
+	return writeProtocolMessageResponse(c, prefixedRuntimeMessage("密匙不存在", runtimeMaintenanceMessage(settings)), settings)
 }
 
 // ==================== /v1/responses ====================

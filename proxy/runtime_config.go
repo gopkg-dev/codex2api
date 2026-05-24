@@ -20,7 +20,6 @@ const (
 	defaultCodexMinCLIVersion    = "0.118.0"
 	defaultStreamFlushPolicy     = StreamFlushPolicyImmediate
 	defaultStreamFlushIntervalMS = 20
-	defaultAPIKeyDisabledMessage = "API Key 已被禁用，请联系管理员。"
 	minStreamFlushIntervalMS     = 1
 	maxStreamFlushIntervalMS     = 1000
 )
@@ -32,9 +31,8 @@ type RuntimeSettings struct {
 	StreamFlushIntervalMS            int
 	FilterLocalFallbackResponse      bool
 	DisableFastServiceTier           bool
-	DownstreamUsageMultiplierEnabled bool
 	DownstreamUsageMultiplier        float64
-	APIKeyDisabledMessage            string
+	ProtocolMessageUsageBlastEnabled bool
 	APIMaintenance                   APIMaintenanceConfig
 }
 
@@ -52,9 +50,8 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      true,
 		DisableFastServiceTier:           false,
-		DownstreamUsageMultiplierEnabled: false,
 		DownstreamUsageMultiplier:        1,
-		APIKeyDisabledMessage:            defaultAPIKeyDisabledMessage,
+		ProtocolMessageUsageBlastEnabled: false,
 		APIMaintenance:                   DefaultAPIMaintenanceConfig(),
 	}
 }
@@ -98,10 +95,6 @@ func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	if settings.StreamFlushIntervalMS > maxStreamFlushIntervalMS {
 		settings.StreamFlushIntervalMS = maxStreamFlushIntervalMS
 	}
-	settings.APIKeyDisabledMessage = strings.TrimSpace(settings.APIKeyDisabledMessage)
-	if settings.APIKeyDisabledMessage == "" {
-		settings.APIKeyDisabledMessage = defaultAPIKeyDisabledMessage
-	}
 	if settings.DownstreamUsageMultiplier <= 0 {
 		settings.DownstreamUsageMultiplier = defaults.DownstreamUsageMultiplier
 	}
@@ -121,9 +114,8 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
 		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
 		next.DisableFastServiceTier = settings.DisableFastServiceTier
-		next.DownstreamUsageMultiplierEnabled = settings.DownstreamUsageMultiplierEnabled
 		next.DownstreamUsageMultiplier = settings.DownstreamUsageMultiplier
-		next.APIKeyDisabledMessage = settings.APIKeyDisabledMessage
+		next.ProtocolMessageUsageBlastEnabled = settings.ProtocolMessageUsageBlastEnabled
 		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)
 	}
 	next = NormalizeRuntimeSettings(next)

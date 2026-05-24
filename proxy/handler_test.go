@@ -101,10 +101,10 @@ func TestImageModelIsImageEndpointOnly(t *testing.T) {
 	}
 }
 
-func TestAuthMiddlewareRejectsDisabledAPIKeyWithConfiguredMessage(t *testing.T) {
+func TestAuthMiddlewareRejectsDisabledAPIKeyWithMaintenanceMessage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
-	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "这个 API Key 已暂停使用"})
+	ApplyRuntimeSettings(RuntimeSettings{APIMaintenance: APIMaintenanceConfig{Message: "统一提示"}})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
@@ -146,15 +146,15 @@ func TestAuthMiddlewareRejectsDisabledAPIKeyWithConfiguredMessage(t *testing.T) 
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if payload.Error.Code != string(api.ErrCodeDisabledAPIKey) || payload.Error.Message != "这个 API Key 已暂停使用" {
-		t.Fatalf("error = %#v, want disabled code and custom message", payload.Error)
+	if payload.Error.Code != string(api.ErrCodeDisabledAPIKey) || payload.Error.Message != "密匙已被禁用，统一提示" {
+		t.Fatalf("error = %#v, want disabled code and maintenance message", payload.Error)
 	}
 }
 
-func TestAuthMiddlewareRejectsInvalidAPIKeyWithConfiguredMessage(t *testing.T) {
+func TestAuthMiddlewareRejectsInvalidAPIKeyWithMaintenanceMessage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
-	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "联系管理员处理"})
+	ApplyRuntimeSettings(RuntimeSettings{APIMaintenance: APIMaintenanceConfig{Message: "统一提示"}})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
@@ -191,8 +191,8 @@ func TestAuthMiddlewareRejectsInvalidAPIKeyWithConfiguredMessage(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if payload.Error.Code != string(api.ErrCodeInvalidAPIKey) || payload.Error.Message != "联系管理员处理" {
-		t.Fatalf("error = %#v, want invalid api key code and configured message", payload.Error)
+	if payload.Error.Code != string(api.ErrCodeInvalidAPIKey) || payload.Error.Message != "密匙不存在，统一提示" {
+		t.Fatalf("error = %#v, want invalid api key code and maintenance message", payload.Error)
 	}
 }
 
@@ -200,8 +200,7 @@ func TestAuthMiddlewareInvalidAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		APIKeyDisabledMessage: "联系管理员处理",
-		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+		APIMaintenance: APIMaintenanceConfig{Message: "统一提示"},
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -234,7 +233,7 @@ func TestAuthMiddlewareInvalidAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙不存在，联系管理员处理") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙不存在，统一提示") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body missing expected invalid-key chunks: %s", body)
 	}
 }
@@ -243,8 +242,7 @@ func TestAuthMiddlewareDisabledAPIKeyForcesProtocolStreamResponse(t *testing.T) 
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		APIKeyDisabledMessage: "联系管理员处理",
-		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+		APIMaintenance: APIMaintenanceConfig{Message: "统一提示"},
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -282,7 +280,7 @@ func TestAuthMiddlewareDisabledAPIKeyForcesProtocolStreamResponse(t *testing.T) 
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已被禁用，联系管理员处理") || !strings.Contains(body, "response.completed") {
+	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已被禁用，统一提示") || !strings.Contains(body, "response.completed") {
 		t.Fatalf("stream body missing expected forced disabled-key chunks: %s", body)
 	}
 }
@@ -291,8 +289,7 @@ func TestAuthMiddlewareDisabledAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		APIKeyDisabledMessage: "这个 API Key 已暂停使用",
-		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+		APIMaintenance: APIMaintenanceConfig{Message: "统一提示"},
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -330,7 +327,7 @@ func TestAuthMiddlewareDisabledAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已被禁用，这个 API Key 已暂停使用") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已被禁用，统一提示") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body missing expected disabled-key chunks: %s", body)
 	}
 }
@@ -339,8 +336,7 @@ func TestAuthMiddlewareExpiredAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		APIKeyDisabledMessage: "联系管理员处理",
-		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+		APIMaintenance: APIMaintenanceConfig{Message: "统一提示"},
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -378,7 +374,7 @@ func TestAuthMiddlewareExpiredAPIKeyUsesProtocolStreamResponse(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已过期，联系管理员处理") || !strings.Contains(body, "data: [DONE]") {
+	if !strings.Contains(body, "chat.completion.chunk") || !strings.Contains(body, "密匙已过期，统一提示") || !strings.Contains(body, "data: [DONE]") {
 		t.Fatalf("stream body missing expected expired-key chunks: %s", body)
 	}
 }
@@ -387,8 +383,7 @@ func TestAuthMiddlewareExpiredAPIKeyForcesProtocolStreamResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
 	ApplyRuntimeSettings(RuntimeSettings{
-		APIKeyDisabledMessage: "联系管理员处理",
-		APIMaintenance:        DefaultAPIMaintenanceConfig(),
+		APIMaintenance: APIMaintenanceConfig{Message: "统一提示"},
 	})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
@@ -426,7 +421,7 @@ func TestAuthMiddlewareExpiredAPIKeyForcesProtocolStreamResponse(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream", got)
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已过期，联系管理员处理") || !strings.Contains(body, "response.completed") {
+	if !strings.Contains(body, "response.output_text.delta") || !strings.Contains(body, "密匙已过期，统一提示") || !strings.Contains(body, "response.completed") {
 		t.Fatalf("stream body missing expected forced expired-key chunks: %s", body)
 	}
 }
@@ -1253,7 +1248,7 @@ func TestAuthMiddlewareSetsAPIKeyContext(t *testing.T) {
 func TestAuthMiddlewareRejectsExpiredAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prev := CurrentRuntimeSettings()
-	ApplyRuntimeSettings(RuntimeSettings{APIKeyDisabledMessage: "联系管理员处理"})
+	ApplyRuntimeSettings(RuntimeSettings{APIMaintenance: APIMaintenanceConfig{Message: "统一提示"}})
 	t.Cleanup(func() { ApplyRuntimeSettings(prev) })
 
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
@@ -1288,8 +1283,8 @@ func TestAuthMiddlewareRejectsExpiredAPIKey(t *testing.T) {
 	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.code").String(); got != string(api.ErrCodeInvalidAuth) {
 		t.Fatalf("error.code = %q, want %q", got, api.ErrCodeInvalidAuth)
 	}
-	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.message").String(); got != "联系管理员处理" {
-		t.Fatalf("error.message = %q, want configured message", got)
+	if got := gjson.GetBytes(recorder.Body.Bytes(), "error.message").String(); got != "密匙已过期，统一提示" {
+		t.Fatalf("error.message = %q, want maintenance message", got)
 	}
 }
 

@@ -4000,10 +4000,8 @@ type settingsResponse struct {
 	StreamFlushIntervalMS            int     `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      bool    `json:"filter_local_fallback_response"`
 	DisableFastServiceTier           bool    `json:"disable_fast_service_tier"`
-	DownstreamUsageMultiplierEnabled bool    `json:"downstream_usage_multiplier_enabled"`
 	DownstreamUsageMultiplier        float64 `json:"downstream_usage_multiplier"`
-	APIKeyDisabledMessage            string  `json:"api_key_disabled_message"`
-	APIMaintenanceEnabled            bool    `json:"api_maintenance_enabled"`
+	ProtocolMessageUsageBlastEnabled bool    `json:"protocol_message_usage_blast_enabled"`
 	APIMaintenanceMessage            string  `json:"api_maintenance_message"`
 	APIMaintenanceSSERandomize       bool    `json:"api_maintenance_sse_randomize"`
 	APIMaintenanceImageB64JSON       string  `json:"api_maintenance_image_b64_json"`
@@ -4074,10 +4072,8 @@ type updateSettingsReq struct {
 	StreamFlushIntervalMS            *int     `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      *bool    `json:"filter_local_fallback_response"`
 	DisableFastServiceTier           *bool    `json:"disable_fast_service_tier"`
-	DownstreamUsageMultiplierEnabled *bool    `json:"downstream_usage_multiplier_enabled"`
 	DownstreamUsageMultiplier        *float64 `json:"downstream_usage_multiplier"`
-	APIKeyDisabledMessage            *string  `json:"api_key_disabled_message"`
-	APIMaintenanceEnabled            *bool    `json:"api_maintenance_enabled"`
+	ProtocolMessageUsageBlastEnabled *bool    `json:"protocol_message_usage_blast_enabled"`
 	APIMaintenanceMessage            *string  `json:"api_maintenance_message"`
 	APIMaintenanceSSERandomize       *bool    `json:"api_maintenance_sse_randomize"`
 	APIMaintenanceImageB64JSON       *string  `json:"api_maintenance_image_b64_json"`
@@ -4527,10 +4523,8 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
-		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
-		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
-		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
+		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
 		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,
@@ -4884,23 +4878,15 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.DisableFastServiceTier = *req.DisableFastServiceTier
 		log.Printf("设置已更新: disable_fast_service_tier = %t", runtimeCfg.DisableFastServiceTier)
 	}
-	if req.DownstreamUsageMultiplierEnabled != nil {
-		runtimeCfg.DownstreamUsageMultiplierEnabled = *req.DownstreamUsageMultiplierEnabled
-		log.Printf("设置已更新: downstream_usage_multiplier_enabled = %t", runtimeCfg.DownstreamUsageMultiplierEnabled)
-	}
 	if req.DownstreamUsageMultiplier != nil {
 		runtimeCfg.DownstreamUsageMultiplier = *req.DownstreamUsageMultiplier
 		log.Printf("设置已更新: downstream_usage_multiplier = %.4f", runtimeCfg.DownstreamUsageMultiplier)
 	}
-	if req.APIKeyDisabledMessage != nil {
-		runtimeCfg.APIKeyDisabledMessage = *req.APIKeyDisabledMessage
-		log.Printf("设置已更新: api_key_disabled_message")
+	if req.ProtocolMessageUsageBlastEnabled != nil {
+		runtimeCfg.ProtocolMessageUsageBlastEnabled = *req.ProtocolMessageUsageBlastEnabled
+		log.Printf("设置已更新: protocol_message_usage_blast_enabled = %t", runtimeCfg.ProtocolMessageUsageBlastEnabled)
 	}
 	maintenanceCfg := runtimeCfg.APIMaintenance
-	if req.APIMaintenanceEnabled != nil {
-		maintenanceCfg.Enabled = *req.APIMaintenanceEnabled
-		log.Printf("设置已更新: api_maintenance.enabled = %t", maintenanceCfg.Enabled)
-	}
 	if req.APIMaintenanceMessage != nil {
 		maintenanceCfg.Message = *req.APIMaintenanceMessage
 		log.Printf("设置已更新: api_maintenance.message")
@@ -5147,9 +5133,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		ImageStorageConfig:               imgConfigJSON,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
-		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
-		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
+		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
 	})
 	if err != nil {
@@ -5234,10 +5219,8 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
-		DownstreamUsageMultiplierEnabled: runtimeCfg.DownstreamUsageMultiplierEnabled,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
-		APIKeyDisabledMessage:            runtimeCfg.APIKeyDisabledMessage,
-		APIMaintenanceEnabled:            runtimeCfg.APIMaintenance.Enabled,
+		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
 		APIMaintenanceSSERandomize:       runtimeCfg.APIMaintenance.SSERandomize,
 		APIMaintenanceImageB64JSON:       runtimeCfg.APIMaintenance.ImageB64JSON,

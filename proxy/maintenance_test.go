@@ -38,8 +38,36 @@ func TestMaintenanceMiddlewareReturnsChatCompletion(t *testing.T) {
 	if got := gjson.Get(recorder.Body.String(), "object").String(); got != "chat.completion" {
 		t.Fatalf("object = %q, want chat.completion", got)
 	}
-	if got := gjson.Get(recorder.Body.String(), "choices.0.message.content").String(); got != "系统维护中" {
+	if got := gjson.Get(recorder.Body.String(), "choices.0.message.content").String(); got != "OpenAI Chat 接口未开启，系统维护中" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestMaintenanceImageResponseIncludesServiceMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ApplyRuntimeSettings(RuntimeSettings{
+		APIMaintenance: APIMaintenanceConfig{
+			Enabled:      true,
+			Message:      "系统维护中",
+			ImageB64JSON: "image-data",
+		},
+	})
+	defer ApplyRuntimeSettings(DefaultRuntimeSettings())
+
+	router := gin.New()
+	router.POST("/v1/images/generations", MaintenanceMiddleware(), func(c *gin.Context) {
+		t.Fatal("handler should be short-circuited by maintenance middleware")
+	})
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"gpt-image-1"}`))
+	router.ServeHTTP(recorder, req)
+
+	if got := gjson.Get(recorder.Body.String(), "data.0.b64_json").String(); got != "image-data" {
+		t.Fatalf("b64_json = %q", got)
+	}
+	if got := gjson.Get(recorder.Body.String(), "data.0.revised_prompt").String(); got != "GPT生图 接口未开启，系统维护中" {
+		t.Fatalf("revised_prompt = %q", got)
 	}
 }
 
@@ -131,15 +159,16 @@ func TestMaintenanceResponsesStreamMatchesResponsesEventShape(t *testing.T) {
 	if got := gjson.Get(dataEvents[3], "item_id").String(); got != itemID {
 		t.Fatalf("content_part.added item_id = %q, want %q", got, itemID)
 	}
-	if got := gjson.Get(dataEvents[4], "delta").String(); got != "你好！有什么我可以帮你的吗？" {
+	wantMessage := "Codex 接口未开启，你好！有什么我可以帮你的吗？"
+	if got := gjson.Get(dataEvents[4], "delta").String(); got != wantMessage {
 		t.Fatalf("delta = %q", got)
 	}
-	if got := gjson.Get(dataEvents[5], "text").String(); got != "你好！有什么我可以帮你的吗？" {
+	if got := gjson.Get(dataEvents[5], "text").String(); got != wantMessage {
 		t.Fatalf("done text = %q", got)
 	}
 }
 
-func TestMaintenanceSSEUsesLargeRandomUsage(t *testing.T) {
+func TestMaintenanceSSEUsesSmallMessageUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ApplyRuntimeSettings(RuntimeSettings{
 		APIMaintenance: APIMaintenanceConfig{
@@ -162,20 +191,118 @@ func TestMaintenanceSSEUsesLargeRandomUsage(t *testing.T) {
 
 	chatEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/chat/completions"))
 	chatUsage := gjson.Get(lastJSONDataEvent(t, chatEvents), "usage")
-	assertLargeMaintenanceUsage(t, chatUsage, "prompt_tokens", "completion_tokens", "total_tokens")
+	assertMaintenanceUsage(t, chatUsage, "prompt_tokens", "completion_tokens", "total_tokens", 0, int64(len([]rune("OpenAI Chat 接口未开启，系统维护中"))))
 
 	responseEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/responses"))
 	responseUsage := gjson.Get(responseEvents[len(responseEvents)-1], "response.usage")
-	assertLargeMaintenanceUsage(t, responseUsage, "input_tokens", "output_tokens", "total_tokens")
+	assertMaintenanceUsage(t, responseUsage, "input_tokens", "output_tokens", "total_tokens", 0, int64(len([]rune("Codex 接口未开启，系统维护中"))))
 
 	messageEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/messages"))
 	messageStartUsage := gjson.Get(messageEvents[0], "message.usage")
-	if input := messageStartUsage.Get("input_tokens").Int(); input < 80000 {
-		t.Fatalf("messages input_tokens = %d, want large random usage", input)
+	if input := messageStartUsage.Get("input_tokens").Int(); input != 0 {
+		t.Fatalf("messages input_tokens = %d, want 0", input)
 	}
 	messageDeltaUsage := gjson.Get(messageEvents[len(messageEvents)-2], "usage")
-	if output := messageDeltaUsage.Get("output_tokens").Int(); output < 20000 {
-		t.Fatalf("messages output_tokens = %d, want large random usage", output)
+	wantMessagesUsage := int64(len([]rune("Claude 接口未开启，系统维护中")))
+	if output := messageDeltaUsage.Get("output_tokens").Int(); output != wantMessagesUsage {
+		t.Fatalf("messages output_tokens = %d, want %d", output, wantMessagesUsage)
+	}
+}
+
+func TestMaintenanceSSEAppliesProtocolMessageBlastMultiplier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ApplyRuntimeSettings(RuntimeSettings{
+		ProtocolMessageUsageBlastEnabled: true,
+		APIMaintenance: APIMaintenanceConfig{
+			Enabled: true,
+			Message: "维护",
+		},
+	})
+	defer ApplyRuntimeSettings(DefaultRuntimeSettings())
+
+	router := gin.New()
+	router.POST("/v1/responses", MaintenanceMiddleware(), func(c *gin.Context) {
+		t.Fatal("responses handler should be short-circuited by maintenance middleware")
+	})
+
+	responseEvents := parseSSEDataEvents(t, serveMaintenanceStream(t, router, "/v1/responses"))
+	responseUsage := gjson.Get(responseEvents[len(responseEvents)-1], "response.usage")
+	wantOutput := int64(len([]rune("Codex 接口未开启，维护"))) * 99999
+	assertMaintenanceUsage(t, responseUsage, "input_tokens", "output_tokens", "total_tokens", 0, wantOutput)
+}
+
+func TestResolveMaintenanceConfigUsesGlobalMessageWithServicePrefix(t *testing.T) {
+	cfg := APIMaintenanceConfig{
+		Enabled: true,
+		Message: "全局维护",
+		Routes: map[string]APIMaintenanceRouteConfig{
+			"/v1/responses": {Message: "旧的单独文案"},
+		},
+	}
+
+	resolved := resolveMaintenanceConfig("/v1/responses", cfg)
+	if resolved.Message != "Codex 接口未开启，全局维护" {
+		t.Fatalf("message = %q", resolved.Message)
+	}
+}
+
+func TestNormalizeMaintenanceConfigMigratesLegacyGlobalSwitch(t *testing.T) {
+	disabled := false
+	legacyOff := NormalizeAPIMaintenanceConfig(APIMaintenanceConfig{
+		Enabled: true,
+		Routes: map[string]APIMaintenanceRouteConfig{
+			"/v1/messages": {Enabled: &disabled},
+		},
+	})
+	if !legacyOff.RoutesControlled {
+		t.Fatal("RoutesControlled = false, want migrated per-route settings")
+	}
+	if !maintenanceRouteEnabled("/v1/chat/completions", legacyOff) {
+		t.Fatal("chat route = available, want maintenance inherited from legacy enabled switch")
+	}
+	if maintenanceRouteEnabled("/v1/messages", legacyOff) {
+		t.Fatal("messages route = maintenance, want legacy disabled override preserved")
+	}
+
+	legacyDisabled := NormalizeAPIMaintenanceConfig(APIMaintenanceConfig{
+		Enabled: false,
+		Routes: map[string]APIMaintenanceRouteConfig{
+			"/v1/responses": {},
+		},
+	})
+	for _, path := range maintenanceEndpointPaths {
+		if maintenanceRouteEnabled(path, legacyDisabled) {
+			t.Fatalf("route %s = maintenance, want available after legacy global switch off migration", path)
+		}
+	}
+}
+
+func TestParseMaintenanceConfigMigratesStoredLegacyGlobalSwitch(t *testing.T) {
+	cfg := ParseAPIMaintenanceConfig(`{"enabled":true,"routes":{"/v1/messages":{"enabled":false}}}`)
+	if !maintenanceRouteEnabled("/v1/chat/completions", cfg) {
+		t.Fatal("legacy enabled route should remain in maintenance")
+	}
+	if maintenanceRouteEnabled("/v1/messages", cfg) {
+		t.Fatal("legacy disabled route should remain available")
+	}
+}
+
+func TestMaintenanceMiddlewareUsesPerRouteSwitches(t *testing.T) {
+	enabled := true
+	disabled := false
+	cfg := NormalizeAPIMaintenanceConfig(APIMaintenanceConfig{
+		RoutesControlled: true,
+		Routes: map[string]APIMaintenanceRouteConfig{
+			"/v1/chat/completions": {Enabled: &enabled},
+			"/v1/responses":        {Enabled: &disabled},
+		},
+	})
+
+	if !shouldApplyMaintenance(http.MethodPost, "/v1/chat/completions", cfg) {
+		t.Fatal("chat maintenance = false, want enabled service switch")
+	}
+	if shouldApplyMaintenance(http.MethodPost, "/v1/responses", cfg) {
+		t.Fatal("responses maintenance = true, want disabled service switch")
 	}
 }
 
@@ -327,7 +454,7 @@ func TestMarshalMaintenanceConfigRoundTrip(t *testing.T) {
 		Message:      "维护",
 		SSERandomize: true,
 		ImageB64JSON: "abc",
-		Routes:       map[string]APIMaintenanceRouteConfig{"/v1/responses": {Enabled: &enabled, Message: "Responses 维护"}},
+		Routes:       map[string]APIMaintenanceRouteConfig{"/v1/responses": {Enabled: &enabled, Message: "旧的单独文案"}},
 	})
 
 	raw, err := json.Marshal(cfg)
@@ -339,7 +466,7 @@ func TestMarshalMaintenanceConfigRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	decoded = NormalizeAPIMaintenanceConfig(decoded)
-	if !decoded.Enabled || !decoded.SSERandomize || decoded.Message != "维护" || decoded.Routes["/v1/responses"].Message != "Responses 维护" {
+	if !decoded.Enabled || !decoded.RoutesControlled || !decoded.SSERandomize || decoded.Message != "维护" || decoded.Routes["/v1/responses"].Message != "" {
 		t.Fatalf("decoded config = %#v", decoded)
 	}
 }
@@ -406,16 +533,16 @@ func containsAnyString(s string, values []string) bool {
 	return false
 }
 
-func assertLargeMaintenanceUsage(t *testing.T, usage gjson.Result, inputKey, outputKey, totalKey string) {
+func assertMaintenanceUsage(t *testing.T, usage gjson.Result, inputKey, outputKey, totalKey string, wantInput, wantOutput int64) {
 	t.Helper()
 	input := usage.Get(inputKey).Int()
 	output := usage.Get(outputKey).Int()
 	total := usage.Get(totalKey).Int()
-	if input < 80000 {
-		t.Fatalf("%s = %d, want large random usage; usage=%s", inputKey, input, usage.Raw)
+	if input != wantInput {
+		t.Fatalf("%s = %d, want %d; usage=%s", inputKey, input, wantInput, usage.Raw)
 	}
-	if output < 20000 {
-		t.Fatalf("%s = %d, want large random usage; usage=%s", outputKey, output, usage.Raw)
+	if output != wantOutput {
+		t.Fatalf("%s = %d, want %d; usage=%s", outputKey, output, wantOutput, usage.Raw)
 	}
 	if total != input+output {
 		t.Fatalf("%s = %d, want input+output %d; usage=%s", totalKey, total, input+output, usage.Raw)
