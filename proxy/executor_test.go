@@ -3,13 +3,62 @@ package proxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/codex2api/auth"
 )
+
+func TestReadSSEStreamWithSilenceTimeoutCancelsIdleUpstream(t *testing.T) {
+	reader, writer := io.Pipe()
+	defer reader.Close()
+	defer writer.Close()
+
+	cancelCalled := make(chan struct{}, 1)
+	callbackCalled := make(chan []byte, 1)
+	errCh := make(chan error, 1)
+	timeoutCh := make(chan bool, 1)
+
+	go func() {
+		err, timedOut := ReadSSEStreamWithSilenceTimeout(reader, 20*time.Millisecond, func() {
+			cancelCalled <- struct{}{}
+			_ = writer.CloseWithError(context.DeadlineExceeded)
+		}, func(data []byte) bool {
+			callbackCalled <- append([]byte(nil), data...)
+			return false
+		})
+		errCh <- err
+		timeoutCh <- timedOut
+	}()
+
+	select {
+	case <-cancelCalled:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("silence timeout did not cancel upstream")
+	}
+
+	select {
+	case timedOut := <-timeoutCh:
+		if !timedOut {
+			t.Fatal("timedOut = false, want true")
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("timeout waiting for ReadSSEStreamWithSilenceTimeout")
+	}
+
+	if err := <-errCh; err == nil {
+		t.Fatal("err = nil, want timeout/cancel error")
+	}
+	select {
+	case data := <-callbackCalled:
+		t.Fatalf("callback should not be called for silent upstream data: %s", data)
+	default:
+	}
+}
 
 func TestReadSSEStream_MergesMultilineData(t *testing.T) {
 	input := strings.NewReader("data: {\"type\":\"response.output_text.delta\",\n" +

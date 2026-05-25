@@ -646,6 +646,15 @@ func classifyResponseFailedOutcome(payload []byte) streamOutcome {
 	}
 }
 
+func upstreamSilenceTimeoutOutcome() streamOutcome {
+	return streamOutcome{
+		logStatusCode:  logStatusUpstreamStreamBreak,
+		failureKind:    "timeout",
+		failureMessage: fmt.Sprintf("上游 SSE 超过 %s 未返回数据", upstreamStreamSilenceTimeout),
+		penalize:       true,
+	}
+}
+
 func responseFailedStatusCode(payload []byte) int {
 	for _, path := range []string{
 		"response.status_code",
@@ -1378,6 +1387,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			deltaCharCount := 0
 			var readErr error
 			var writeErr error
+			streamTimedOut := false
 			wroteAnyBody := false
 			var imageLogInfo imageUsageLogInfo
 			var terminalFailurePayload []byte
@@ -1408,7 +1418,7 @@ func (h *Handler) Responses(c *gin.Context) {
 					}
 					return err
 				}
-				readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+				readErr, streamTimedOut = ReadSSEStreamWithSilenceTimeout(resp.Body, upstreamStreamSilenceTimeout, upstreamCancel, func(data []byte) bool {
 					if filter.observe(data) {
 						localFallbackDetected = true
 						return false
@@ -1479,6 +1489,9 @@ func (h *Handler) Responses(c *gin.Context) {
 
 			totalDuration := int(time.Since(start).Milliseconds())
 			outcome := classifyStreamOutcome(c.Request.Context().Err(), readErr, writeErr, gotTerminal)
+			if streamTimedOut {
+				outcome = upstreamSilenceTimeoutOutcome()
+			}
 			if len(terminalFailurePayload) > 0 {
 				outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 			}
@@ -1676,6 +1689,7 @@ func (h *Handler) Responses(c *gin.Context) {
 		deltaCharCount := 0  // 累计 delta 字符数（用于断流时估算 token）
 		var readErr error
 		var writeErr error
+		streamTimedOut := false
 		wroteAnyBody := false
 		var responseJSON []byte
 		var imageLogInfo imageUsageLogInfo
@@ -1711,7 +1725,7 @@ func (h *Handler) Responses(c *gin.Context) {
 				}
 				return err
 			}
-			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+			readErr, streamTimedOut = ReadSSEStreamWithSilenceTimeout(resp.Body, upstreamStreamSilenceTimeout, upstreamCancel, func(data []byte) bool {
 				if filter.observe(data) {
 					localFallbackDetected = true
 					return false
@@ -1773,7 +1787,7 @@ func (h *Handler) Responses(c *gin.Context) {
 			seenOutputItems := make(map[string]struct{})
 			imageOutputs := make([]json.RawMessage, 0, 1)
 			seenImageOutputs := make(map[string]struct{})
-			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+			readErr, streamTimedOut = ReadSSEStreamWithSilenceTimeout(resp.Body, upstreamStreamSilenceTimeout, upstreamCancel, func(data []byte) bool {
 				if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
 					localFallbackDetected = true
 					return false
@@ -1828,6 +1842,9 @@ func (h *Handler) Responses(c *gin.Context) {
 		// 断流检测 + token 估算
 		totalDuration := int(time.Since(start).Milliseconds())
 		outcome := classifyStreamOutcome(c.Request.Context().Err(), readErr, writeErr, gotTerminal)
+		if streamTimedOut {
+			outcome = upstreamSilenceTimeoutOutcome()
+		}
 		if len(terminalFailurePayload) > 0 {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		}
@@ -2395,6 +2412,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		deltaCharCount := 0  // 累计 delta 字符数（用于断流时估算 token）
 		var readErr error
 		var writeErr error
+		streamTimedOut := false
 		wroteAnyBody := false
 		var compactResult []byte
 		var terminalFailurePayload []byte
@@ -2432,7 +2450,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 				}
 				return err
 			}
-			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+			readErr, streamTimedOut = ReadSSEStreamWithSilenceTimeout(resp.Body, upstreamStreamSilenceTimeout, upstreamCancel, func(data []byte) bool {
 				if filter.observe(data) {
 					localFallbackDetected = true
 					return false
@@ -2504,7 +2522,7 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 			var fullReasoning strings.Builder
 			var toolCalls []ToolCallResult
 
-			readErr = ReadSSEStream(resp.Body, func(data []byte) bool {
+			readErr, streamTimedOut = ReadSSEStreamWithSilenceTimeout(resp.Body, upstreamStreamSilenceTimeout, upstreamCancel, func(data []byte) bool {
 				if CurrentRuntimeSettings().FilterLocalFallbackResponse && isLocalFallbackResponse(data) {
 					localFallbackDetected = true
 					return false
@@ -2547,6 +2565,9 @@ func (h *Handler) ChatCompletions(c *gin.Context) {
 		// 断流检测 + token 估算
 		totalDuration := int(time.Since(start).Milliseconds())
 		outcome := classifyStreamOutcome(c.Request.Context().Err(), readErr, writeErr, gotTerminal)
+		if streamTimedOut {
+			outcome = upstreamSilenceTimeoutOutcome()
+		}
 		if len(terminalFailurePayload) > 0 {
 			outcome = classifyResponseFailedOutcome(terminalFailurePayload)
 		}

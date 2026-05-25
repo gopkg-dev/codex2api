@@ -739,6 +739,31 @@ func ReadSSEStream(body io.Reader, callback func(data []byte) bool) error {
 	}
 }
 
+// ReadSSEStreamWithSilenceTimeout reads SSE data and cancels the upstream when
+// no complete data event arrives within timeout. The timeout is refreshed after
+// every data event delivered to callback.
+func ReadSSEStreamWithSilenceTimeout(body io.Reader, timeout time.Duration, cancel context.CancelFunc, callback func(data []byte) bool) (error, bool) {
+	if timeout <= 0 || cancel == nil {
+		return ReadSSEStream(body, callback), false
+	}
+
+	var timedOut atomic.Bool
+	timer := time.AfterFunc(timeout, func() {
+		timedOut.Store(true)
+		cancel()
+	})
+	defer timer.Stop()
+
+	err := ReadSSEStream(body, func(data []byte) bool {
+		if !timer.Stop() && timedOut.Load() {
+			return false
+		}
+		timer.Reset(timeout)
+		return callback(data)
+	})
+	return err, timedOut.Load()
+}
+
 // sseBufferPool 用于复用 SSE 读取缓冲区（64KB 以适应 reasoning 模型的大 thinking block）
 var sseBufferPool = sync.Pool{
 	New: func() interface{} {

@@ -10,6 +10,10 @@ import (
 // 5 秒兜住绝大多数情况，又不会在上游卡住时无限占用连接。
 const upstreamDrainTimeout = 5 * time.Second
 
+// upstreamStreamSilenceTimeout 控制上游 SSE 长时间没有任何 data 事件时的兜底取消。
+// 正常长推理会持续发送 delta / reasoning 事件；完全静默通常代表上游空占连接。
+const upstreamStreamSilenceTimeout = 2 * time.Minute
+
 // newDrainableUpstreamContext 创建一个与客户端 context 解耦的上游 context，
 // 用途：客户端断开后仍能再读 drainTimeout 时间，以便从上游 SSE 拿到
 // response.completed 事件里的 usage（流式请求计费的关键）。
