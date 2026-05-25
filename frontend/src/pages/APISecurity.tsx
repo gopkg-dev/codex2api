@@ -7,12 +7,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  AlertTriangle,
-  ShieldCheck,
-  Upload,
-  X,
-} from "lucide-react";
+import { ShieldCheck, Upload, X } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import StateShell from "../components/StateShell";
 import ToastNotice from "../components/ToastNotice";
@@ -720,10 +715,6 @@ export default function APISecurity() {
             </div>
           </div>
         </SecurityCard>
-      </div>
-      <div className="mt-4 flex items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
-        <AlertTriangle className="size-4 shrink-0" />
-        自动封禁触发后会立即影响 /v1 请求，请根据实际流量设置合理阈值。
       </div>
     </div>
   );
