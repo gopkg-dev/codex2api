@@ -356,6 +356,7 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 		"ip_auto_ban_duration_minutes": 45,
 		"filter_local_fallback_response": false,
 		"disable_fast_service_tier": true,
+		"image_generation_tool_mode": "force_off",
 		"api_maintenance_message": "维护中",
 		"api_maintenance_sse_randomize": true,
 		"api_maintenance_image_b64_json": "abc",
@@ -380,6 +381,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	}
 	if !payload.DisableFastServiceTier {
 		t.Fatal("DisableFastServiceTier = false, want true")
+	}
+	if payload.ImageGenerationToolMode != "force_off" {
+		t.Fatalf("ImageGenerationToolMode = %q, want force_off", payload.ImageGenerationToolMode)
 	}
 	if strings.Contains(recorder.Body.String(), `"api_key_disabled_message"`) {
 		t.Fatalf("response still exposes api_key_disabled_message: %s", recorder.Body.String())
@@ -407,6 +411,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	if !gotSettings.DisableFastServiceTier {
 		t.Fatal("persisted DisableFastServiceTier = false, want true")
 	}
+	if gotSettings.ImageGenerationToolMode != "force_off" {
+		t.Fatalf("persisted ImageGenerationToolMode = %q, want force_off", gotSettings.ImageGenerationToolMode)
+	}
 	if gotSettings.IPQPSLimit != 4 {
 		t.Fatalf("persisted IPQPSLimit = %d, want 4", gotSettings.IPQPSLimit)
 	}
@@ -428,6 +435,9 @@ func TestUpdateSettingsPersistsMaintenanceRuntimeConfig(t *testing.T) {
 	}
 	if !runtimeCfg.DisableFastServiceTier {
 		t.Fatal("runtime DisableFastServiceTier = false, want true")
+	}
+	if runtimeCfg.ImageGenerationToolMode != proxy.ImageGenerationToolModeForceOff {
+		t.Fatalf("runtime ImageGenerationToolMode = %q, want %q", runtimeCfg.ImageGenerationToolMode, proxy.ImageGenerationToolModeForceOff)
 	}
 	route := runtimeCfg.APIMaintenance.Routes["/v1/responses"]
 	if route.Enabled == nil || !*route.Enabled || runtimeCfg.APIMaintenance.Message != "维护中" {

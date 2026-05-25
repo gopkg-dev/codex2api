@@ -931,6 +931,59 @@ func TestPrepareResponsesBody_ToolChoiceImageGenerationAutoInjectsTool(t *testin
 	}
 }
 
+func TestPrepareResponsesBody_ForceDisablesImageGenerationTool(t *testing.T) {
+	previous := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{ImageGenerationToolMode: ImageGenerationToolModeForceOff})
+	defer ApplyRuntimeSettings(previous)
+
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"draw a poster",
+		"size":"1024x1024",
+		"tool_choice":{"type":"image_generation"},
+		"tools":[
+			{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object","properties":{}}},
+			{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}
+		]
+	}`)
+
+	got, _ := PrepareResponsesBody(raw)
+
+	if strings.Contains(string(got), "image_generation") {
+		t.Fatalf("expected image_generation to be stripped; body=%s", got)
+	}
+	if gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("expected image tool_choice to be stripped; body=%s", got)
+	}
+	if gjson.GetBytes(got, "size").Exists() {
+		t.Fatalf("expected top-level image options to be stripped; body=%s", got)
+	}
+	if toolType := gjson.GetBytes(got, "tools.0.type").String(); toolType != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", toolType, got)
+	}
+}
+
+func TestPrepareResponsesBody_ForceEnablesImageGenerationToolForStructuredOutput(t *testing.T) {
+	previous := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{ImageGenerationToolMode: ImageGenerationToolModeForceOn})
+	defer ApplyRuntimeSettings(previous)
+
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"return JSON",
+		"text":{"format":{"type":"json_object"}}
+	}`)
+
+	got, _ := PrepareResponsesBody(raw)
+
+	if toolType := gjson.GetBytes(got, "tools.0.type").String(); toolType != "image_generation" {
+		t.Fatalf("tool type = %q, want image_generation; body=%s", toolType, got)
+	}
+	if instructions := gjson.GetBytes(got, "instructions").String(); !strings.Contains(instructions, codexImageGenerationBridgeMarker) {
+		t.Fatalf("expected bridge instructions, got %q", instructions)
+	}
+}
+
 func TestPrepareResponsesBody_NormalizesNestedReasoningEffortAliases(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.4",

@@ -16,10 +16,15 @@ const (
 	StreamFlushPolicyImmediate = "immediate"
 	StreamFlushPolicyCoalesce  = "coalesce"
 
+	ImageGenerationToolModeAuto     = "auto"
+	ImageGenerationToolModeForceOn  = "force_on"
+	ImageGenerationToolModeForceOff = "force_off"
+
 	defaultClientCompatMode      = ClientCompatModePreserve
 	defaultCodexMinCLIVersion    = "0.118.0"
 	defaultStreamFlushPolicy     = StreamFlushPolicyImmediate
 	defaultStreamFlushIntervalMS = 20
+	defaultImageGenerationMode   = ImageGenerationToolModeAuto
 	minStreamFlushIntervalMS     = 1
 	maxStreamFlushIntervalMS     = 1000
 )
@@ -31,6 +36,7 @@ type RuntimeSettings struct {
 	StreamFlushIntervalMS            int
 	FilterLocalFallbackResponse      bool
 	DisableFastServiceTier           bool
+	ImageGenerationToolMode          string
 	DownstreamUsageMultiplier        float64
 	ProtocolMessageUsageBlastEnabled bool
 	APIMaintenance                   APIMaintenanceConfig
@@ -50,6 +56,7 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		StreamFlushIntervalMS:            defaultStreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      true,
 		DisableFastServiceTier:           false,
+		ImageGenerationToolMode:          defaultImageGenerationMode,
 		DownstreamUsageMultiplier:        1,
 		ProtocolMessageUsageBlastEnabled: false,
 		APIMaintenance:                   DefaultAPIMaintenanceConfig(),
@@ -80,10 +87,24 @@ func NormalizeStreamFlushPolicy(policy string) string {
 	}
 }
 
+func NormalizeImageGenerationToolMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ImageGenerationToolModeAuto:
+		return ImageGenerationToolModeAuto
+	case ImageGenerationToolModeForceOn:
+		return ImageGenerationToolModeForceOn
+	case ImageGenerationToolModeForceOff:
+		return ImageGenerationToolModeForceOff
+	default:
+		return ImageGenerationToolModeAuto
+	}
+}
+
 func NormalizeRuntimeSettings(settings RuntimeSettings) RuntimeSettings {
 	defaults := DefaultRuntimeSettings()
 	settings.ClientCompatMode = NormalizeClientCompatMode(settings.ClientCompatMode)
 	settings.StreamFlushPolicy = NormalizeStreamFlushPolicy(settings.StreamFlushPolicy)
+	settings.ImageGenerationToolMode = NormalizeImageGenerationToolMode(settings.ImageGenerationToolMode)
 	if strings.TrimSpace(settings.CodexMinCLIVersion) == "" {
 		settings.CodexMinCLIVersion = defaults.CodexMinCLIVersion
 	} else {
@@ -114,6 +135,7 @@ func ApplyRuntimeSettingsFromSystem(settings *database.SystemSettings) RuntimeSe
 		next.StreamFlushIntervalMS = settings.StreamFlushIntervalMS
 		next.FilterLocalFallbackResponse = settings.FilterLocalFallbackResponse
 		next.DisableFastServiceTier = settings.DisableFastServiceTier
+		next.ImageGenerationToolMode = settings.ImageGenerationToolMode
 		next.DownstreamUsageMultiplier = settings.DownstreamUsageMultiplier
 		next.ProtocolMessageUsageBlastEnabled = settings.ProtocolMessageUsageBlastEnabled
 		next.APIMaintenance = ParseAPIMaintenanceConfig(settings.APIMaintenanceConfig)

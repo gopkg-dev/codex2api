@@ -452,6 +452,7 @@ export interface SystemSettings {
   stream_flush_interval_ms: number;
   filter_local_fallback_response: boolean;
   disable_fast_service_tier: boolean;
+  image_generation_tool_mode: "auto" | "force_on" | "force_off" | string;
   downstream_usage_multiplier: number;
   protocol_message_usage_blast_enabled: boolean;
   api_maintenance_message: string;

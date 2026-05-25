@@ -289,6 +289,7 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 		IPRPMLimit:                       7,
 		FilterLocalFallbackResponse:      true,
 		DisableFastServiceTier:           true,
+		ImageGenerationToolMode:          "force_on",
 		DownstreamUsageMultiplier:        3.5,
 		ProtocolMessageUsageBlastEnabled: true,
 		APIMaintenanceConfig:             `{"enabled":true,"message":"维护中"}`,
@@ -310,6 +311,9 @@ func TestSystemSettingsPersistsMaintenanceFields(t *testing.T) {
 	}
 	if !got.DisableFastServiceTier {
 		t.Fatal("DisableFastServiceTier = false, want true")
+	}
+	if got.ImageGenerationToolMode != "force_on" {
+		t.Fatalf("ImageGenerationToolMode = %q, want force_on", got.ImageGenerationToolMode)
 	}
 	if got.DownstreamUsageMultiplier != 3.5 {
 		t.Fatalf("DownstreamUsageMultiplier = %f, want 3.5", got.DownstreamUsageMultiplier)

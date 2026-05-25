@@ -3962,6 +3962,7 @@ type settingsResponse struct {
 	StreamFlushIntervalMS            int     `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      bool    `json:"filter_local_fallback_response"`
 	DisableFastServiceTier           bool    `json:"disable_fast_service_tier"`
+	ImageGenerationToolMode          string  `json:"image_generation_tool_mode"`
 	DownstreamUsageMultiplier        float64 `json:"downstream_usage_multiplier"`
 	ProtocolMessageUsageBlastEnabled bool    `json:"protocol_message_usage_blast_enabled"`
 	APIMaintenanceMessage            string  `json:"api_maintenance_message"`
@@ -4017,6 +4018,7 @@ type updateSettingsReq struct {
 	StreamFlushIntervalMS            *int     `json:"stream_flush_interval_ms"`
 	FilterLocalFallbackResponse      *bool    `json:"filter_local_fallback_response"`
 	DisableFastServiceTier           *bool    `json:"disable_fast_service_tier"`
+	ImageGenerationToolMode          *string  `json:"image_generation_tool_mode"`
 	DownstreamUsageMultiplier        *float64 `json:"downstream_usage_multiplier"`
 	ProtocolMessageUsageBlastEnabled *bool    `json:"protocol_message_usage_blast_enabled"`
 	APIMaintenanceMessage            *string  `json:"api_maintenance_message"`
@@ -4448,6 +4450,7 @@ func (h *Handler) GetSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		ImageGenerationToolMode:          runtimeCfg.ImageGenerationToolMode,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,
@@ -4795,6 +4798,10 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		runtimeCfg.DisableFastServiceTier = *req.DisableFastServiceTier
 		log.Printf("设置已更新: disable_fast_service_tier = %t", runtimeCfg.DisableFastServiceTier)
 	}
+	if req.ImageGenerationToolMode != nil {
+		runtimeCfg.ImageGenerationToolMode = proxy.NormalizeImageGenerationToolMode(*req.ImageGenerationToolMode)
+		log.Printf("设置已更新: image_generation_tool_mode = %s", runtimeCfg.ImageGenerationToolMode)
+	}
 	if req.DownstreamUsageMultiplier != nil {
 		runtimeCfg.DownstreamUsageMultiplier = *req.DownstreamUsageMultiplier
 		log.Printf("设置已更新: downstream_usage_multiplier = %.4f", runtimeCfg.DownstreamUsageMultiplier)
@@ -4931,6 +4938,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		ImageGenerationToolMode:          runtimeCfg.ImageGenerationToolMode,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceConfig:             proxy.EncodeAPIMaintenanceConfig(runtimeCfg.APIMaintenance),
@@ -5008,6 +5016,7 @@ func (h *Handler) UpdateSettings(c *gin.Context) {
 		StreamFlushIntervalMS:            runtimeCfg.StreamFlushIntervalMS,
 		FilterLocalFallbackResponse:      runtimeCfg.FilterLocalFallbackResponse,
 		DisableFastServiceTier:           runtimeCfg.DisableFastServiceTier,
+		ImageGenerationToolMode:          runtimeCfg.ImageGenerationToolMode,
 		DownstreamUsageMultiplier:        runtimeCfg.DownstreamUsageMultiplier,
 		ProtocolMessageUsageBlastEnabled: runtimeCfg.ProtocolMessageUsageBlastEnabled,
 		APIMaintenanceMessage:            runtimeCfg.APIMaintenance.Message,

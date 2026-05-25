@@ -45,6 +45,7 @@ type SecurityForm = Pick<
   | "ip_auto_ban_on_rpm"
   | "filter_local_fallback_response"
   | "disable_fast_service_tier"
+  | "image_generation_tool_mode"
   | "downstream_usage_multiplier"
   | "protocol_message_usage_blast_enabled"
   | "api_maintenance_message"
@@ -63,6 +64,7 @@ const defaultForm: SecurityForm = {
   ip_auto_ban_on_rpm: true,
   filter_local_fallback_response: true,
   disable_fast_service_tier: false,
+  image_generation_tool_mode: "auto",
   downstream_usage_multiplier: 1,
   protocol_message_usage_blast_enabled: false,
   api_maintenance_message: "系统维护中，请稍后重试。",
@@ -197,6 +199,7 @@ export default function APISecurity() {
         ip_auto_ban_on_rpm: settings.ip_auto_ban_on_rpm,
         filter_local_fallback_response: settings.filter_local_fallback_response,
         disable_fast_service_tier: settings.disable_fast_service_tier,
+        image_generation_tool_mode: settings.image_generation_tool_mode || "auto",
         downstream_usage_multiplier: settings.downstream_usage_multiplier,
         protocol_message_usage_blast_enabled:
           settings.protocol_message_usage_blast_enabled,
@@ -230,6 +233,7 @@ export default function APISecurity() {
         ip_auto_ban_on_qps: updated.ip_auto_ban_on_qps,
         ip_auto_ban_on_rpm: updated.ip_auto_ban_on_rpm,
         disable_fast_service_tier: updated.disable_fast_service_tier,
+        image_generation_tool_mode: updated.image_generation_tool_mode || "auto",
         downstream_usage_multiplier: updated.downstream_usage_multiplier,
         protocol_message_usage_blast_enabled:
           updated.protocol_message_usage_blast_enabled,
@@ -473,6 +477,62 @@ export default function APISecurity() {
                   }
                   label="关闭 OpenAI Fast"
                 />
+              </div>
+              <div className="rounded-lg border border-border p-4">
+                <div>
+                  <div className="text-sm font-semibold">图片工具</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    控制 Codex /responses 的 image_generation 工具注入。
+                  </p>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  {[
+                    {
+                      value: "auto",
+                      label: "自动",
+                      desc: "按请求特征注入",
+                    },
+                    {
+                      value: "force_on",
+                      label: "强制开启",
+                      desc: "始终注入图片工具",
+                    },
+                    {
+                      value: "force_off",
+                      label: "强制关闭",
+                      desc: "移除图片工具",
+                    },
+                  ].map((option) => {
+                    const active =
+                      form.image_generation_tool_mode === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() =>
+                          setForm((f) => ({
+                            ...f,
+                            image_generation_tool_mode:
+                              option.value as SecurityForm["image_generation_tool_mode"],
+                          }))
+                        }
+                        className={cn(
+                          "rounded-md border px-3 py-2 text-left text-sm transition-colors",
+                          active
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border bg-background hover:bg-muted",
+                        )}
+                      >
+                        <span className="block font-semibold">
+                          {option.label}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {option.desc}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div className="rounded-lg border border-border p-4">
                 <div>

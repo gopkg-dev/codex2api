@@ -523,6 +523,7 @@ export default function Settings() {
     stream_flush_interval_ms: 20,
     filter_local_fallback_response: true,
     disable_fast_service_tier: false,
+    image_generation_tool_mode: "auto",
     downstream_usage_multiplier: 1,
     protocol_message_usage_blast_enabled: false,
     api_maintenance_message: "系统维护中，请稍后重试。",

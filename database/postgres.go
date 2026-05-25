@@ -618,6 +618,7 @@ func (db *DB) migrate(ctx context.Context) error {
 			recovery_probe_interval_minutes INT DEFAULT 30,
 			scheduler_mode VARCHAR(20) DEFAULT 'round_robin',
 			disable_fast_service_tier BOOLEAN DEFAULT FALSE,
+			image_generation_tool_mode TEXT DEFAULT 'auto',
 			downstream_usage_multiplier DOUBLE PRECISION DEFAULT 1,
 			protocol_message_usage_blast_enabled BOOLEAN DEFAULT FALSE
 		);
@@ -671,6 +672,7 @@ func (db *DB) migrate(ctx context.Context) error {
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS stream_flush_interval_ms INT DEFAULT 20;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS filter_local_fallback_response BOOLEAN DEFAULT TRUE;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS disable_fast_service_tier BOOLEAN DEFAULT FALSE;
+	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS image_generation_tool_mode TEXT DEFAULT 'auto';
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS downstream_usage_multiplier DOUBLE PRECISION DEFAULT 1;
 	ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS protocol_message_usage_blast_enabled BOOLEAN DEFAULT FALSE;
 	ALTER TABLE system_settings DROP COLUMN IF EXISTS downstream_usage_multiplier_enabled;
@@ -1178,6 +1180,7 @@ type SystemSettings struct {
 	StreamFlushIntervalMS            int
 	FilterLocalFallbackResponse      bool
 	DisableFastServiceTier           bool
+	ImageGenerationToolMode          string
 	DownstreamUsageMultiplier        float64
 	ProtocolMessageUsageBlastEnabled bool
 	APIMaintenanceConfig             string // JSON: {"enabled":false,"message":"...","routes":{...}}
@@ -1218,6 +1221,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		       COALESCE(stream_flush_interval_ms, 20),
 		       COALESCE(filter_local_fallback_response, true),
 		       COALESCE(disable_fast_service_tier, false),
+		       COALESCE(image_generation_tool_mode, 'auto'),
 		       COALESCE(downstream_usage_multiplier, 1),
 		       COALESCE(protocol_message_usage_blast_enabled, false),
 		       COALESCE(api_maintenance_config, '{}')
@@ -1237,6 +1241,7 @@ func (db *DB) GetSystemSettings(ctx context.Context) (*SystemSettings, error) {
 		&s.ClientCompatMode, &s.CodexMinCLIVersion, &s.UsageLogMode, &s.UsageLogBatchSize,
 		&s.UsageLogFlushIntervalSeconds, &s.StreamFlushPolicy, &s.StreamFlushIntervalMS,
 		&s.FilterLocalFallbackResponse, &s.DisableFastServiceTier,
+		&s.ImageGenerationToolMode,
 		&s.DownstreamUsageMultiplier, &s.ProtocolMessageUsageBlastEnabled,
 		&s.APIMaintenanceConfig,
 	)
@@ -1263,11 +1268,11 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				resin_url, resin_platform_name,
 				client_compat_mode, codex_min_cli_version, usage_log_mode, usage_log_batch_size,
 				usage_log_flush_interval_seconds, stream_flush_policy, stream_flush_interval_ms,
-				scheduler_mode, filter_local_fallback_response, disable_fast_service_tier,
+				scheduler_mode, filter_local_fallback_response, disable_fast_service_tier, image_generation_tool_mode,
 				downstream_usage_multiplier, protocol_message_usage_blast_enabled, api_maintenance_config,
 				affinity_mode
 			)
-			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48)
+			VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49)
 			ON CONFLICT (id) DO UPDATE SET
 				site_name               = EXCLUDED.site_name,
 				site_logo               = EXCLUDED.site_logo,
@@ -1313,6 +1318,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 				scheduler_mode = EXCLUDED.scheduler_mode,
 				filter_local_fallback_response = EXCLUDED.filter_local_fallback_response,
 				disable_fast_service_tier = EXCLUDED.disable_fast_service_tier,
+				image_generation_tool_mode = EXCLUDED.image_generation_tool_mode,
 				downstream_usage_multiplier = EXCLUDED.downstream_usage_multiplier,
 				protocol_message_usage_blast_enabled = EXCLUDED.protocol_message_usage_blast_enabled,
 				api_maintenance_config = EXCLUDED.api_maintenance_config,
@@ -1327,6 +1333,7 @@ func (db *DB) UpdateSystemSettings(ctx context.Context, s *SystemSettings) error
 		s.ClientCompatMode, s.CodexMinCLIVersion, s.UsageLogMode, s.UsageLogBatchSize,
 		s.UsageLogFlushIntervalSeconds, s.StreamFlushPolicy, s.StreamFlushIntervalMS,
 		s.SchedulerMode, s.FilterLocalFallbackResponse, s.DisableFastServiceTier,
+		s.ImageGenerationToolMode,
 		s.DownstreamUsageMultiplier, s.ProtocolMessageUsageBlastEnabled, s.APIMaintenanceConfig,
 		normalizeAffinityMode(s.AffinityMode))
 	if err != nil {

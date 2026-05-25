@@ -586,6 +586,66 @@ func applyResponsesImageGenerationBridgeInstructions(body map[string]any) bool {
 	return true
 }
 
+func removeResponsesImageGenerationBridgeInstructions(body map[string]any) bool {
+	if len(body) == 0 {
+		return false
+	}
+	existing, ok := body["instructions"].(string)
+	if !ok || !strings.Contains(existing, codexImageGenerationBridgeMarker) {
+		return false
+	}
+	next := strings.TrimSpace(strings.Replace(existing, codexImageGenerationBridgeText, "", 1))
+	if next == "" {
+		delete(body, "instructions")
+	} else {
+		body["instructions"] = next
+	}
+	return true
+}
+
+func stripResponsesImageGenerationTool(body map[string]any) bool {
+	if len(body) == 0 {
+		return false
+	}
+	modified := false
+	if tools, ok := body["tools"].([]any); ok {
+		filtered := make([]any, 0, len(tools))
+		for _, rawTool := range tools {
+			toolMap, ok := rawTool.(map[string]any)
+			if ok && strings.TrimSpace(firstNonEmptyAnyString(toolMap["type"])) == "image_generation" {
+				modified = true
+				continue
+			}
+			filtered = append(filtered, rawTool)
+		}
+		if len(filtered) == 0 {
+			delete(body, "tools")
+		} else if modified {
+			body["tools"] = filtered
+		}
+	}
+	if hasResponsesImageGenerationToolChoice(body) {
+		delete(body, "tool_choice")
+		modified = true
+	}
+	for _, key := range responsesImageGenerationOptionFields {
+		if _, ok := body[key]; ok {
+			delete(body, key)
+			modified = true
+		}
+	}
+	for _, key := range responsesImageGenerationUnsupportedOptionFields {
+		if _, ok := body[key]; ok {
+			delete(body, key)
+			modified = true
+		}
+	}
+	if removeResponsesImageGenerationBridgeInstructions(body) {
+		modified = true
+	}
+	return modified
+}
+
 func hasTopLevelResponsesImageOptions(body map[string]any) bool {
 	if len(body) == 0 {
 		return false
@@ -1330,6 +1390,7 @@ func PrepareResponsesBody(rawBody []byte) ([]byte, string) {
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return rawBody, ""
 	}
+	imageToolMode := CurrentRuntimeSettings().ImageGenerationToolMode
 
 	// 1. 强制设置 Codex 必需字段
 	body["stream"] = true
@@ -1338,7 +1399,9 @@ func PrepareResponsesBody(rawBody []byte) ([]byte, string) {
 		body["include"] = []string{"reasoning.encrypted_content"}
 	}
 
-	normalizeResponsesImageOnlyModel(body)
+	if imageToolMode != ImageGenerationToolModeForceOff {
+		normalizeResponsesImageOnlyModel(body)
+	}
 	normalizeResponsesPromptCompat(body)
 
 	// 2. 字符串 input → 数组包装（Codex 要求 input 为 list）
@@ -1419,12 +1482,16 @@ func PrepareResponsesBody(rawBody []byte) ([]byte, string) {
 			}
 		}
 	}
-	if shouldAutoInjectResponsesImageGenerationTool(body) {
+	if imageToolMode == ImageGenerationToolModeForceOff {
+		stripResponsesImageGenerationTool(body)
+	} else if imageToolMode == ImageGenerationToolModeForceOn || shouldAutoInjectResponsesImageGenerationTool(body) {
 		ensureResponsesImageGenerationTool(body)
 	}
-	moveTopLevelResponsesImageOptions(body)
-	normalizeResponsesImageGenerationTools(body, promptText)
-	applyResponsesImageGenerationBridgeInstructions(body)
+	if imageToolMode != ImageGenerationToolModeForceOff {
+		moveTopLevelResponsesImageOptions(body)
+		normalizeResponsesImageGenerationTools(body, promptText)
+		applyResponsesImageGenerationBridgeInstructions(body)
+	}
 
 	// 6. 展开 previous_response_id
 	prevID, _ := body["previous_response_id"].(string)
