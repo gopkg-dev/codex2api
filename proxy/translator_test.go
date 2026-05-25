@@ -633,6 +633,38 @@ func TestPrepareOpenAIResponsesBody_ImageGenerationToolChoiceInjectsTool(t *test
 	}
 }
 
+func TestPrepareOpenAIResponsesBody_ForceDisablesImageGenerationTool(t *testing.T) {
+	previous := CurrentRuntimeSettings()
+	ApplyRuntimeSettings(RuntimeSettings{ImageGenerationToolMode: ImageGenerationToolModeForceOff})
+	defer ApplyRuntimeSettings(previous)
+
+	raw := []byte(`{
+		"model":"gpt-5.4",
+		"input":"draw a cat",
+		"size":"1024x1024",
+		"tool_choice":{"type":"image_generation"},
+		"tools":[
+			{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object","properties":{}}},
+			{"type":"image_generation","model":"gpt-image-2","size":"1024x1024"}
+		]
+	}`)
+
+	got := PrepareOpenAIResponsesBody(raw)
+
+	if strings.Contains(string(got), "image_generation") {
+		t.Fatalf("expected image_generation to be stripped; body=%s", got)
+	}
+	if gjson.GetBytes(got, "tool_choice").Exists() {
+		t.Fatalf("expected image tool_choice to be stripped; body=%s", got)
+	}
+	if gjson.GetBytes(got, "size").Exists() {
+		t.Fatalf("expected top-level image options to be stripped; body=%s", got)
+	}
+	if toolType := gjson.GetBytes(got, "tools.0.type").String(); toolType != "function" {
+		t.Fatalf("tool type = %q, want function; body=%s", toolType, got)
+	}
+}
+
 func TestPrepareResponsesBody_SanitizesTextFormatJSONSchema(t *testing.T) {
 	raw := []byte(`{
 		"model":"gpt-5.4",

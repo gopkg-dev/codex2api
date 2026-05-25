@@ -1814,6 +1814,47 @@ func TestSQLiteGetIPUsageStatsAggregatesRecentTraffic(t *testing.T) {
 	}
 }
 
+func TestUsageLogFlushPreservesRequestTime(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+
+	db, err := New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("New(sqlite) 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	ctx := context.Background()
+	requestTime := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	if err := db.InsertUsageLog(ctx, &UsageLogInput{
+		ClientIP:    "203.0.113.77",
+		StatusCode:  200,
+		TotalTokens: 100,
+		CreatedAt:   requestTime,
+	}); err != nil {
+		t.Fatalf("InsertUsageLog 返回错误: %v", err)
+	}
+
+	db.flushLogs()
+
+	recentStats, err := db.GetIPUsageStats(ctx, 10, time.Now().Add(-1*time.Minute))
+	if err != nil {
+		t.Fatalf("GetIPUsageStats recent 返回错误: %v", err)
+	}
+	for _, stat := range recentStats {
+		if stat.IP == "203.0.113.77" {
+			t.Fatalf("recent stats contains delayed log: %#v", stat)
+		}
+	}
+
+	historicalStats, err := db.GetIPUsageStats(ctx, 10, requestTime.Add(-time.Second))
+	if err != nil {
+		t.Fatalf("GetIPUsageStats historical 返回错误: %v", err)
+	}
+	if len(historicalStats) != 1 || historicalStats[0].IP != "203.0.113.77" {
+		t.Fatalf("historical stats = %#v, want 203.0.113.77", historicalStats)
+	}
+}
+
 func TestSQLiteUsageLogsTimeRangeUsesUTCStorage(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
 

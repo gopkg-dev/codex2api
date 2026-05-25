@@ -1549,6 +1549,7 @@ func PrepareOpenAIResponsesBody(rawBody []byte) []byte {
 	if err := json.Unmarshal(rawBody, &body); err != nil {
 		return rawBody
 	}
+	imageToolMode := CurrentRuntimeSettings().ImageGenerationToolMode
 
 	if re, ok := body["reasoning_effort"].(string); ok {
 		if normalized := normalizeReasoningEffort(re); normalized != "" {
@@ -1576,11 +1577,15 @@ func PrepareOpenAIResponsesBody(rawBody []byte) []byte {
 	normalizeResponsesFunctionTools(body)
 	normalizeResponsesContentPartTypes(body)
 	normalizeResponsesInputMessageContent(body)
-	if shouldInjectOpenAIResponsesImageGenerationTool(body) {
+	if imageToolMode == ImageGenerationToolModeForceOff {
+		stripResponsesImageGenerationTool(body)
+	} else if shouldInjectOpenAIResponsesImageGenerationTool(body) {
 		ensureResponsesImageGenerationTool(body)
 	}
-	moveTopLevelResponsesImageOptions(body)
-	normalizeResponsesImageGenerationTools(body, extractResponsesPromptText(body))
+	if imageToolMode != ImageGenerationToolModeForceOff {
+		moveTopLevelResponsesImageOptions(body)
+		normalizeResponsesImageGenerationTools(body, extractResponsesPromptText(body))
+	}
 
 	result, err := json.Marshal(body)
 	if err != nil {

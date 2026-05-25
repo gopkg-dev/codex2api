@@ -502,6 +502,63 @@ func TestCreateIPBansBatchAddsValidIPsAndRefreshesRuntime(t *testing.T) {
 	}
 }
 
+func TestCreatePermanentIPBanRefreshesRuntime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	dbPath := filepath.Join(t.TempDir(), "codex2api.db")
+	db, err := database.New("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("database.New 返回错误: %v", err)
+	}
+	defer db.Close()
+
+	tc := cache.NewMemory(4)
+	settings := &database.SystemSettings{MaxConcurrency: 2, TestModel: "gpt-5.4", TestConcurrency: 50}
+	store := auth.NewStore(db, tc, settings)
+	rateLimiter := proxy.NewRateLimiter(0)
+	handler := NewHandler(store, db, tc, rateLimiter, "secret")
+
+	body := `{
+		"ips": ["183.186.138.57"],
+		"reason": "manual",
+		"source": "manual",
+		"expires_in_minutes": 0
+	}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/admin/ip-bans/batch", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.CreateIPBansBatch(ctx)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var payload createIPBansBatchResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Created != 1 || payload.Bans[0].ExpiresAt != "" {
+		t.Fatalf("batch response = %#v, want one permanent ban", payload)
+	}
+
+	router := gin.New()
+	router.Use(rateLimiter.Middleware())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	banned := httptest.NewRecorder()
+	bannedReq := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","stream":true}`))
+	bannedReq.RemoteAddr = "183.186.138.57:1234"
+	router.ServeHTTP(banned, bannedReq)
+	if banned.Code != http.StatusOK {
+		t.Fatalf("banned status = %d, want 200; body=%s", banned.Code, banned.Body.String())
+	}
+	if body := banned.Body.String(); !strings.Contains(body, "触发风控已被锁定") || !strings.Contains(body, "response.completed") {
+		t.Fatalf("banned body = %s, want protocol ban message", body)
+	}
+}
+
 func TestListIPBansPaginates(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

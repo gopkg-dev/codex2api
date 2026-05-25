@@ -477,7 +477,7 @@ export default function APISecurity() {
                 <div>
                   <div className="text-sm font-semibold">图片工具</div>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    控制 Codex /responses 的 image_generation 工具注入。
+                    控制 Responses 网关的 image_generation 工具注入与移除。
                   </p>
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-3">
